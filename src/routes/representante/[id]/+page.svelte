@@ -48,7 +48,7 @@
   let cidadeFilter = "Todas";
   let cidades: string[] = [];
 
-  // mapa de último contato por otica_id (Date | null)
+  // mapa de último contato por otica_id (Date ISO string | null)
   let lastContactMap: Record<string, string | null> = {};
 
   // detalhes
@@ -58,6 +58,17 @@
   let carregandoListas = true;
   let carregandoOtica = false;
   let salvandoContato = false;
+
+  // temperatura sections typed
+  const tempSections = ["QUENTE", "MORNO", "FRIO"] as const;
+  type TempKey = (typeof tempSections)[number];
+
+  // agrupamento por temperatura (typed)
+  let porTemperaturaGrouped: Record<TempKey, OticaRow[]> = {
+    QUENTE: [],
+    MORNO: [],
+    FRIO: [],
+  };
 
   // -----------------------
   // Util helpers
@@ -92,7 +103,7 @@
   async function carregarListas() {
     carregandoListas = true;
 
-    // Todas as óticas liberadas (filtro representative handled in view)
+    // Todas as óticas (view já filtra por representante)
     const { data: todas, error: e1 } = await supabase
       .from("view_oticas_representante")
       .select("*")
@@ -113,7 +124,7 @@
     });
     cidades = ["Todas", ...Array.from(citySet).sort()];
 
-    // temperatura view (já ordenaremos por nossa ordem)
+    // temperatura view
     const { data: temp, error: e2 } = await supabase
       .from("view_oticas_por_temperatura")
       .select("*")
@@ -125,7 +136,8 @@
     const { data: novas, error: e3 } = await supabase
       .from("view_oticas_novas")
       .select("*")
-      .eq("representante_id", representanteId);
+      .eq("representante_id", representanteId)
+      .order("created_at", { ascending: false });
 
     novasOtica = (novas ?? []) as OticaRow[];
 
@@ -141,7 +153,6 @@
       if (e4) {
         console.error("Erro ao buscar contatos:", e4);
       } else {
-        // primeiro item por otica é o mais recente (porque ordenamos desc)
         lastContactMap = {};
         (contatosAll ?? []).forEach((c: any) => {
           if (!lastContactMap[c.otica_id]) lastContactMap[c.otica_id] = c.created_at;
@@ -158,6 +169,13 @@
       if (oa !== ob) return oa - ob;
       return (a.nome ?? "").localeCompare(b.nome ?? "");
     });
+
+    // agrupar por temperatura com tipagem segura
+    porTemperaturaGrouped = {
+      QUENTE: temperaturaOtica.filter((o) => o.temperatura === "QUENTE"),
+      MORNO: temperaturaOtica.filter((o) => o.temperatura === "MORNO"),
+      FRIO: temperaturaOtica.filter((o) => o.temperatura === "FRIO"),
+    };
 
     carregandoListas = false;
   }
@@ -214,9 +232,7 @@
 
     if (error) {
       console.error("Erro ao inserir contato:", error);
-      // opcional: mostrar toast
     } else {
-      // atualizar lista de contatos locais e mapa de último contato
       const novo: ContatoRow = {
         id: insertData.id,
         otica_id: insertData.otica_id,
@@ -246,13 +262,6 @@
     );
   });
 
-  // agrupamento por temperatura com a ordem QUENTE -> MORNO -> FRIO
-  $: porTemperaturaGrouped = {
-    QUENTE: temperaturaOtica.filter((o) => o.temperatura === "QUENTE"),
-    MORNO: temperaturaOtica.filter((o) => o.temperatura === "MORNO"),
-    FRIO: temperaturaOtica.filter((o) => o.temperatura === "FRIO"),
-  };
-
   // -----------------------
   // Navegação
   // -----------------------
@@ -278,7 +287,7 @@
 <div class="wrp">
   <header class="header">
     <div class="brand">
-      <img src="/uplab-logo.jpg" class="logo" />
+      <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
       <div>
         <h1 class="title">Painel do Representante</h1>
         <p class="subtitle">Gerencie suas Óticas</p>
@@ -351,7 +360,6 @@
                 <div class="right">
                   <div class="meta">
                     <div class="chip temp">{o.temperatura ?? "—"}</div>
-                    <!-- indicador do ultimo contato -->
                     {#if lastContactMap[o.id]}
                       {#if daysSince(lastContactMap[o.id]) <= 7}
                         <div class="badge ok" title={"Último contato: " + formatDateShort(lastContactMap[o.id])}>Recent</div>
@@ -379,7 +387,7 @@
         <!-- SUB-VIEW: TEMPERATURA (agrupada QUENTE/MORNO/FRIO) -->
         {#if sub === "temperatura"}
           <div class="temp-sections">
-            {#each ["QUENTE","MORNO","FRIO"] as sec}
+            {#each tempSections as sec}
               <section class="temp-block">
                 <h3 class="temp-heading">{sec}</h3>
                 {#if porTemperaturaGrouped[sec].length === 0}
@@ -515,21 +523,6 @@
               </div>
             </section>
 
-            {#if funil}
-              <section class="panel">
-                <h3 class="p-title">Funil Comercial</h3>
-                <div class="muted">Etapa atual: <b>{funil.etapa_atual}</b></div>
-                <div class="timeline">
-                  {#each funil.historico ?? [] as h}
-                    <div class="t-item">
-                      <div class="t-when">{formatDateShort(h.data)}</div>
-                      <div class="t-what"><b>{h.etapa_nova}</b><div class="muted">{h.descricao}</div></div>
-                    </div>
-                  {/each}
-                </div>
-              </section>
-            {/if}
-
             <section class="panel">
               <h3 class="p-title">Contatos Recentes</h3>
 
@@ -649,7 +642,7 @@
   .caret { font-size:20px; color:var(--muted); }
 
   .temp-sections { display:flex; flex-direction:column; gap:16px; }
-  .temp-block { background:transparent; }
+  .temp-block { }
   .temp-heading { margin:0 0 8px 0; font-weight:700; color:#0f172a; }
 
   .details { max-width:920px; margin:0 auto; background:var(--card); border-radius:14px; padding:18px; border:1px solid #e6eef3; box-shadow:var(--shadow); }
