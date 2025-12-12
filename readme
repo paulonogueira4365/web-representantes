@@ -1,0 +1,56 @@
+🧩 Telas (apenas 2 arquivos principais)
+1️⃣ Seleção do Representante (/+page.svelte)
+
+O usuário clica no seu nome e entra.
+
+2️⃣ Painel do Representante (/representante/[id]/+page.svelte)
+
+Possui 3 tabs internas:
+
+a) Minhas Óticas
+
+Nome
+
+Cidade / UF
+
+Temperatura
+
+Status de liberação
+
+Último contato
+
+b) Funil Comercial
+
+Mapa completo das óticas dele por etapa:
+
+Primeiro contato
+
+Apresentação
+
+Cadastro
+
+Voucher
+
+Primeiro pedido
+
+Acompanhamento
+
+c) Contatos Recentes
+
+Lista limpa:
+
+Data
+
+Meio
+
+Status
+
+Observação
+
+🏗 Tecnologias
+
+SvelteKit 5
+
+Supabase (read-only)
+
+Charts opcionais
