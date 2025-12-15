@@ -1,6 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from "@supabase/supabase-js";
 
-const url = import.meta.env.VITE_SUPABASE_URL!;
-const key = import.meta.env.VITE_SUPABASE_ANON_KEY!;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(url, key);
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error("SUPABASE ENV NÃO DEFINIDA NO VERCEL");
+}
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
