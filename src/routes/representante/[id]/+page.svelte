@@ -1,17 +1,9 @@
 <script lang="ts">
-  import { supabase } from "$lib/supabase";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { onMount } from "svelte";
+  import { supabase } from "$lib/supabase";
+  import { registrarFCM } from "$lib/firebase";
 
-onMount(() => {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/firebase-messaging-sw.js");
-  }
-});
-
-import { registrarFCM } from "$lib/firebase";
-import { supabase } from "$lib/supabase";
 
 async function ativarNotificacoes() {
   const permission = await Notification.requestPermission();
