@@ -6,6 +6,13 @@
 
 
 async function ativarNotificacoes() {
+  if (typeof window === "undefined") return;
+
+  if (!("Notification" in window)) {
+    alert("Este navegador não suporta notificações");
+    return;
+  }
+
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
     alert("Notificações bloqueadas");
@@ -21,6 +28,7 @@ async function ativarNotificacoes() {
 
   alert("Notificações ativadas com sucesso 🔔");
 }
+
 
   /* =====================
      DADOS INICIAIS
