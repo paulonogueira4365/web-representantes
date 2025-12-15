@@ -363,7 +363,8 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
             <button
               class="btn-primary"
               disabled={salvandoContato}
-              on:click={() => marcarContatoRapido(detalhes.id)}
+             on:click={() => detalhes && marcarContatoRapido(detalhes.id)}
+
             >
               {#if salvandoContato}
                 Salvando...
