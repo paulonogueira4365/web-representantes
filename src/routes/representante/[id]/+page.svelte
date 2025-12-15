@@ -103,30 +103,7 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
   /* =====================
      NOTIFICAÇÕES
   ===================== */
-  async function ativarNotificacoes() {
-    if (typeof window === "undefined") return;
-
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      alert("Notificação não permitida");
-      return;
-    }
-
-    const reg = await navigator.serviceWorker.register("/sw.js");
-
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: import.meta.env.VITE_VAPID_PUBLIC_KEY
-    });
-
-    await supabase.from("push_subscriptions").upsert({
-      representante_id: representanteId,
-      subscription: sub
-    });
-
-    alert("Notificações ativadas com sucesso 🔔");
-  }
-
+ 
   /* =====================
      LISTAGEM
   ===================== */
