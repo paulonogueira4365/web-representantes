@@ -7,6 +7,11 @@
 		id: string;
 		nome: string;
 	};
+onMount(() => {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/firebase-messaging-sw.js");
+  }
+});
 
 	let representantes: Representante[] = [];
 	let carregando = true;
