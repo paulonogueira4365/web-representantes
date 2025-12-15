@@ -13,13 +13,24 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  console.log("[FCM] Background message", payload);
-
   self.registration.showNotification(
     payload.notification?.title || "UPLAB",
     {
       body: payload.notification?.body || "Nova notificação",
-      icon: "/icons/icon-192.png"
+      icon: "/icons/icon-192.png",
+      data: {
+        link: payload.fcmOptions?.link || "https://web-representantes.vercel.app"
+      }
     }
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const url = event.notification?.data?.link;
+
+  event.waitUntil(
+    clients.openWindow(url)
   );
 });

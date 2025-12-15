@@ -1,30 +1,30 @@
 import { initializeApp } from "firebase/app";
-import { getMessaging, getToken, isSupported } from "firebase/messaging";
+import { getMessaging, getToken } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_SENDER_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
+const messaging = getMessaging(app);
 
 export async function registrarFCM() {
-  const supported = await isSupported();
-  if (!supported) {
-    throw new Error("FCM não suportado neste navegador");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    throw new Error("Permissão de notificação negada");
   }
-
-  const messaging = getMessaging(app);
 
   const token = await getToken(messaging, {
     vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY
   });
 
   if (!token) {
-    throw new Error("Não foi possível obter token FCM");
+    throw new Error("Token FCM não gerado");
   }
 
   return token;
