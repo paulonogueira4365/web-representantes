@@ -2,12 +2,11 @@ import { initializeApp } from "firebase/app";
 import { getMessaging, getToken, isSupported } from "firebase/messaging";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAryWJzsVvMiVSQuaEjj8SpezBcHkAjsgE",
-  authDomain: "uplab-comercial.firebaseapp.com",
-  projectId: "uplab-comercial",
-  storageBucket: "uplab-comercial.firebasestorage.app",
-  messagingSenderId: "907273602838",
-  appId: "1:907273602838:web:06dd570c09a0243da0f237"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
@@ -25,7 +24,7 @@ export async function registrarFCM() {
   });
 
   if (!token) {
-    throw new Error("Não foi possível obter o token FCM");
+    throw new Error("Não foi possível obter token FCM");
   }
 
   return token;

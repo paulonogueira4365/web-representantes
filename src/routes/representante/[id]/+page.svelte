@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { supabase } from "$lib/supabase";
-  import { registrarFCM } from "$lib/firebase";
+ 
 
 
 async function ativarNotificacoes() {
@@ -19,6 +19,9 @@ async function ativarNotificacoes() {
     return;
   }
 
+  // 🔥 IMPORT DINÂMICO (SSR-safe)
+  const { registrarFCM } = await import("$lib/firebase");
+
   const token = await registrarFCM();
 
   await supabase.from("push_subscriptions").upsert({
@@ -28,6 +31,7 @@ async function ativarNotificacoes() {
 
   alert("Notificações ativadas com sucesso 🔔");
 }
+
 
 
   /* =====================
