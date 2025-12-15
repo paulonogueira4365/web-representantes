@@ -601,4 +601,3 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
 }
 
 </style>
-

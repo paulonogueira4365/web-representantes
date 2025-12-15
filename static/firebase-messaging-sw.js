@@ -5,7 +5,7 @@ firebase.initializeApp({
   apiKey: "AIzaSyAryWJzsVvMiVSQuaEjj8SpezBcHkAjsgE",
   authDomain: "uplab-comercial.firebaseapp.com",
   projectId: "uplab-comercial",
-  storageBucket: "uplab-comercial.firebasestorage.app",
+  storageBucket: "uplab-comercial.appspot.com",
   messagingSenderId: "907273602838",
   appId: "1:907273602838:web:06dd570c09a0243da0f237"
 });
@@ -14,23 +14,10 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
   self.registration.showNotification(
-    payload.notification?.title || "UPLAB",
+    payload.notification.title,
     {
-      body: payload.notification?.body || "Nova notificação",
-      icon: "/icons/icon-192.png",
-      data: {
-        link: payload.fcmOptions?.link || "https://web-representantes.vercel.app"
-      }
+      body: payload.notification.body,
+      icon: "/uplab-logo.jpg"
     }
-  );
-});
-
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-
-  const url = event.notification?.data?.link;
-
-  event.waitUntil(
-    clients.openWindow(url)
   );
 });

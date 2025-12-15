@@ -1,4 +1,5 @@
-import { initializeApp } from "firebase/app";
+// src/lib/firebase.ts
+import { initializeApp, getApps } from "firebase/app";
 import { getMessaging, getToken } from "firebase/messaging";
 
 const firebaseConfig = {
@@ -10,14 +11,17 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
-const messaging = getMessaging(app);
+const app =
+  getApps().length === 0
+    ? initializeApp(firebaseConfig)
+    : getApps()[0];
 
 export async function registrarFCM() {
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    throw new Error("Permissão de notificação negada");
+  if (typeof window === "undefined") {
+    throw new Error("FCM só pode rodar no browser");
   }
+
+  const messaging = getMessaging(app);
 
   const token = await getToken(messaging, {
     vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY
