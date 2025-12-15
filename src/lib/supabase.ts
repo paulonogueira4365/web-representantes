@@ -1,19 +1,26 @@
-import { createClient } from "@supabase/supabase-js";
+import { initializeApp } from "firebase/app";
+import { getMessaging, getToken } from "firebase/messaging";
 
-// Pega as variáveis de ambiente
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
 
-// Verifica se as variáveis de ambiente estão definidas
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("Erro: SUPABASE_ENV NÃO DEFINIDAS NO VERCEL");
-  throw new Error(
-    "As variáveis de ambiente SUPABASE_URL e SUPABASE_ANON_KEY precisam ser configuradas corretamente no Vercel."
-  );
+const app = initializeApp(firebaseConfig);
+const messaging = getMessaging(app);
+
+export async function registrarFCM() {
+  const token = await getToken(messaging, {
+    vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
+  });
+
+  if (!token) {
+    throw new Error("Token FCM não gerado");
+  }
+
+  return token;
 }
-
-// Cria o cliente do Supabase
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// Exemplo de log para verificar se o cliente foi criado corretamente
-console.log("Supabase client configurado com sucesso!");
