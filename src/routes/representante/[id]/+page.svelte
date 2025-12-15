@@ -2,6 +2,33 @@
   import { supabase } from "$lib/supabase";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
+  import { onMount } from "svelte";
+
+onMount(() => {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/firebase-messaging-sw.js");
+  }
+});
+
+import { registrarFCM } from "$lib/firebase";
+import { supabase } from "$lib/supabase";
+
+async function ativarNotificacoes() {
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    alert("Notificações bloqueadas");
+    return;
+  }
+
+  const token = await registrarFCM();
+
+  await supabase.from("push_subscriptions").upsert({
+    representante_id: representanteId,
+    fcm_token: token
+  });
+
+  alert("Notificações ativadas com sucesso 🔔");
+}
 
   /* =====================
      DADOS INICIAIS
