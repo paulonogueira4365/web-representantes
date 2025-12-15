@@ -8,6 +8,11 @@
 async function ativarNotificacoes() {
   if (typeof window === "undefined") return;
 
+  if (!representanteId) {
+    alert("ID do representante não encontrado");
+    return;
+  }
+
   if (!("Notification" in window)) {
     alert("Este navegador não suporta notificações");
     return;
@@ -19,15 +24,26 @@ async function ativarNotificacoes() {
     return;
   }
 
-  // 🔥 IMPORT DINÂMICO (SSR-safe)
   const { registrarFCM } = await import("$lib/firebase");
-
   const token = await registrarFCM();
 
-  await supabase.from("push_subscriptions").upsert({
-    representante_id: representanteId,
-    fcm_token: token
-  });
+  if (!token) {
+    alert("Não foi possível obter o token de notificação");
+    return;
+  }
+
+  const { error } = await supabase
+    .from("push_subscriptions")
+    .upsert({
+      representante_id: representanteId,
+      fcm_token: token
+    });
+
+  if (error) {
+    console.error("Erro push_subscriptions:", error);
+    alert("Erro ao ativar notificações");
+    return;
+  }
 
   alert("Notificações ativadas com sucesso 🔔");
 }
