@@ -30,18 +30,16 @@ async function ativarNotificacoes() {
     return;
   }
 
-  const { error } = await supabase
-    .from("push_subscriptions")
-    .upsert({
+  await supabase
+  .from("push_subscriptions")
+  .upsert(
+    {
       representante_id: representanteId,
-      fcm_token: token,
-    });
+      fcm_token: token
+    },
+    { onConflict: "representante_id,fcm_token" }
+  );
 
-  if (error) {
-    console.error(error);
-    alert("Erro ao salvar push");
-    return;
-  }
 
   alert("Notificações ativadas com sucesso 🔔");
 }
