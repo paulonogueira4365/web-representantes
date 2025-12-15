@@ -8,13 +8,8 @@
 async function ativarNotificacoes() {
   if (typeof window === "undefined") return;
 
-  if (!representanteId) {
-    alert("ID do representante não encontrado");
-    return;
-  }
-
-  if (!("Notification" in window)) {
-    alert("Este navegador não suporta notificações");
+  if (!("serviceWorker" in navigator)) {
+    alert("Navegador não suporta Service Worker");
     return;
   }
 
@@ -24,11 +19,14 @@ async function ativarNotificacoes() {
     return;
   }
 
+  // 🔥 registra o SW
+  await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+
   const { registrarFCM } = await import("$lib/firebase");
   const token = await registrarFCM();
 
   if (!token) {
-    alert("Não foi possível obter o token de notificação");
+    alert("Token FCM não gerado");
     return;
   }
 
@@ -36,17 +34,18 @@ async function ativarNotificacoes() {
     .from("push_subscriptions")
     .upsert({
       representante_id: representanteId,
-      fcm_token: token
+      fcm_token: token,
     });
 
   if (error) {
-    console.error("Erro push_subscriptions:", error);
-    alert("Erro ao ativar notificações");
+    console.error(error);
+    alert("Erro ao salvar push");
     return;
   }
 
   alert("Notificações ativadas com sucesso 🔔");
 }
+
 
 
 
