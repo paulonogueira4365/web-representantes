@@ -3,13 +3,16 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
 
-  // SSR-safe: id vindo do +page.ts
+  /* =====================
+     DADOS INICIAIS
+  ===================== */
   export let data: { id: string };
   const representanteId = data.id;
+console.log("REPRESENTANTE ID DA ROTA:", representanteId);
 
-  // -----------------------
-  // Tipos
-  // -----------------------
+  /* =====================
+     TIPOS
+  ===================== */
   type OticaRow = {
     id: string;
     nome: string;
@@ -23,6 +26,7 @@
     created_at: string;
     representante_id: string | null;
     liberada: boolean;
+    observacao: string | null;
   };
 
   type ContatoRow = {
@@ -33,9 +37,9 @@
     created_at: string;
   };
 
-  // -----------------------
-  // Estado UI
-  // -----------------------
+  /* =====================
+     ESTADO
+  ===================== */
   let ativo: "oticas" | "detalhes" = "oticas";
   let sub: "todas" | "temperatura" | "novas" = "todas";
 
@@ -43,106 +47,98 @@
   let temperaturaOtica: OticaRow[] = [];
   let novasOtica: OticaRow[] = [];
 
-  // mapas e filtros
   let busca = "";
   let cidadeFilter = "Todas";
   let cidades: string[] = [];
 
-  // mapa de último contato por otica_id (Date ISO string | null)
   let lastContactMap: Record<string, string | null> = {};
 
-  // detalhes
   let oticaSelecionada: string | null = null;
   let detalhes: OticaRow | null = null;
   let contatos: ContatoRow[] = [];
+
   let carregandoListas = true;
   let carregandoOtica = false;
   let salvandoContato = false;
 
-  // temperatura sections typed
   const tempSections = ["QUENTE", "MORNO", "FRIO"] as const;
-  type TempKey = (typeof tempSections)[number];
 
-  // agrupamento por temperatura (typed)
-  let porTemperaturaGrouped: Record<TempKey, OticaRow[]> = {
-    QUENTE: [],
-    MORNO: [],
-    FRIO: [],
-  };
-
-  // -----------------------
-  // Util helpers
-  // -----------------------
+  /* =====================
+     HELPERS
+  ===================== */
   function formatDateShort(d?: string | null) {
     if (!d) return "—";
-    try {
-      return new Date(d).toLocaleDateString();
-    } catch {
-      return d;
-    }
+    return new Date(d).toLocaleDateString();
   }
 
   function daysSince(dateIso?: string | null) {
     if (!dateIso) return Infinity;
-    const diff = Date.now() - new Date(dateIso).getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24));
+    return Math.floor(
+      (Date.now() - new Date(dateIso).getTime()) / (1000 * 60 * 60 * 24)
+    );
   }
 
-  // ranking for temperatura
-  const tempOrder = (t: string | null) => {
-    if (!t) return 99;
-    if (t === "QUENTE") return 1;
-    if (t === "MORNO") return 2;
-    if (t === "FRIO") return 3;
-    return 99;
-  };
+  const tempOrder = (t: string | null) =>
+    t === "QUENTE" ? 1 : t === "MORNO" ? 2 : t === "FRIO" ? 3 : 99;
 
-  // -----------------------
-  // Carrega listas principais
-  // -----------------------
+  /* =====================
+     NOTIFICAÇÕES
+  ===================== */
+  async function ativarNotificacoes() {
+    if (typeof window === "undefined") return;
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      alert("Notificação não permitida");
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.register("/sw.js");
+
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: import.meta.env.VITE_VAPID_PUBLIC_KEY
+    });
+
+    await supabase.from("push_subscriptions").upsert({
+      representante_id: representanteId,
+      subscription: sub
+    });
+
+    alert("Notificações ativadas com sucesso 🔔");
+  }
+
+  /* =====================
+     LISTAGEM
+  ===================== */
   async function carregarListas() {
-    carregandoListas = true;
+  carregandoListas = true;
 
-    // Todas as óticas (view já filtra por representante)
+  try {
     const { data: todas, error: e1 } = await supabase
       .from("view_oticas_representante")
       .select("*")
-      .eq("representante_id", representanteId)
-      .order("nome", { ascending: true });
+      .eq("representante_id", representanteId);
 
     if (e1) {
-      console.error("Erro ao buscar todas as óticas:", e1);
+      console.error("Erro view_oticas_representante:", e1);
       todasOtica = [];
-    } else {
-      todasOtica = (todas ?? []) as OticaRow[];
+      carregandoListas = false;
+      return;
     }
 
-    // cidades para filtro
+    todasOtica = (todas ?? []) as OticaRow[];
+
+    // cidades
     const citySet = new Set<string>();
     todasOtica.forEach((o) => {
       if (o.cidade) citySet.add(o.cidade);
     });
     cidades = ["Todas", ...Array.from(citySet).sort()];
 
-    // temperatura view
-    const { data: temp, error: e2 } = await supabase
-      .from("view_oticas_por_temperatura")
-      .select("*")
-      .eq("representante_id", representanteId);
-
-    temperaturaOtica = (temp ?? []) as OticaRow[];
-
-    // novas
-    const { data: novas, error: e3 } = await supabase
-      .from("view_oticas_novas")
-      .select("*")
-      .eq("representante_id", representanteId)
-      .order("created_at", { ascending: false });
-
-    novasOtica = (novas ?? []) as OticaRow[];
-
-    // buscar últimos contatos para todas as óticas carregadas (limite)
+    // últimos contatos
     const oticaIds = todasOtica.map((o) => o.id);
+
     if (oticaIds.length > 0) {
       const { data: contatosAll, error: e4 } = await supabase
         .from("view_contatos_otica")
@@ -150,140 +146,111 @@
         .in("otica_id", oticaIds)
         .order("created_at", { ascending: false });
 
-      if (e4) {
-        console.error("Erro ao buscar contatos:", e4);
-      } else {
+      if (!e4) {
         lastContactMap = {};
         (contatosAll ?? []).forEach((c: any) => {
-          if (!lastContactMap[c.otica_id]) lastContactMap[c.otica_id] = c.created_at;
+          if (!lastContactMap[c.otica_id]) {
+            lastContactMap[c.otica_id] = c.created_at;
+          }
         });
       }
-    } else {
-      lastContactMap = {};
     }
 
-    // preparar temperaturaOtica ordenada (garantir order)
-    temperaturaOtica.sort((a, b) => {
-      const oa = tempOrder(a.temperatura);
-      const ob = tempOrder(b.temperatura);
-      if (oa !== ob) return oa - ob;
-      return (a.nome ?? "").localeCompare(b.nome ?? "");
-    });
-
-    // agrupar por temperatura com tipagem segura
-    porTemperaturaGrouped = {
-      QUENTE: temperaturaOtica.filter((o) => o.temperatura === "QUENTE"),
-      MORNO: temperaturaOtica.filter((o) => o.temperatura === "MORNO"),
-      FRIO: temperaturaOtica.filter((o) => o.temperatura === "FRIO"),
-    };
-
+  } catch (err) {
+    console.error("Erro geral ao carregar listas:", err);
+    todasOtica = [];
+  } finally {
     carregandoListas = false;
   }
+}
 
-  // -----------------------
-  // Abrir detalhes
-  // -----------------------
+
+  /* =====================
+     DETALHES
+  ===================== */
   async function abrirDetalhes(id: string) {
     ativo = "detalhes";
     carregandoOtica = true;
     oticaSelecionada = id;
 
-    const { data: det, error } = await supabase
+    const { data: det } = await supabase
       .from("oticas")
       .select("*")
       .eq("id", id)
       .maybeSingle();
 
-    if (error) {
-      console.error("Erro ao buscar detalhes:", error);
-      detalhes = null;
-    } else {
-      detalhes = (det ?? null) as OticaRow | null;
-    }
+    detalhes = det ?? null;
 
-    const { data: cont, error: e2 } = await supabase
+    const { data: cont } = await supabase
       .from("view_contatos_otica")
       .select("*")
       .eq("otica_id", id)
       .order("created_at", { ascending: false });
 
-    contatos = (cont ?? []) as ContatoRow[];
-
-    // atualizar mapa local
-    lastContactMap[id] = contatos.length > 0 ? contatos[0].created_at : null;
+    contatos = cont ?? [];
+    lastContactMap[id] = contatos[0]?.created_at ?? null;
 
     carregandoOtica = false;
   }
 
-  // -----------------------
-  // Marca contato rápido (botão)
-  // -----------------------
-  async function marcarContatoRapido(meio = "CHECK", nota = "Representante confirmou contato") {
-    if (!oticaSelecionada) return;
-    salvandoContato = true;
+  /* =====================
+     MARCAR CONTATO
+  ===================== */
+  async function marcarContatoRapido(
+    oticaId: string,
+    meio = "CHECK",
+    nota = "Representante confirmou contato"
+  ) {
+    if (!oticaId || !detalhes || salvandoContato) return;
 
-    const payload = {
-      otica_id: oticaSelecionada,
-      meio,
-      nota,
-    };
-
-    const { data: insertData, error } = await supabase.from("contatos").insert([payload]).select().single();
-
-    if (error) {
-      console.error("Erro ao inserir contato:", error);
-    } else {
-      const novo: ContatoRow = {
-        id: insertData.id,
-        otica_id: insertData.otica_id,
-        meio: insertData.meio,
-        nota: insertData.nota,
-        created_at: insertData.created_at,
-      };
-      contatos = [novo, ...contatos];
-      lastContactMap[oticaSelecionada] = novo.created_at;
+    const hoje = new Date().toISOString().slice(0, 10);
+    if (lastContactMap[oticaId]?.slice(0, 10) === hoje) {
+      alert("Você já registrou contato com esta ótica hoje.");
+      return;
     }
 
-    salvandoContato = false;
+    salvandoContato = true;
+
+    try {
+      const { data: contato } = await supabase
+        .from("contatos")
+        .insert([{
+          otica_id: oticaId,
+          nome: detalhes.nome,
+          telefone: detalhes.telefone,
+          cidade: detalhes.cidade,
+          uf: detalhes.uf,
+          responsavel: detalhes.responsavel,
+          meio,
+          nota
+        }])
+        .select()
+        .single();
+
+      await supabase
+        .from("otica_representante")
+        .update({ contato_realizado_em: new Date().toISOString() })
+        .eq("otica_id", oticaId)
+        .eq("representante_id", representanteId);
+
+      lastContactMap[oticaId] = contato.created_at;
+      contatos = [contato, ...contatos];
+
+    } finally {
+      salvandoContato = false;
+    }
   }
 
-  // -----------------------
-  // Buscas / filtros (reactive)
-  // -----------------------
-  $: filtroTexto = busca.trim().toLowerCase();
-  $: filtradas = todasOtica.filter((o) => {
-    if (!o) return false;
-    if (cidadeFilter !== "Todas" && (o.cidade ?? "") !== cidadeFilter) return false;
-    if (!filtroTexto) return true;
-    return (
-      (o.nome ?? "").toLowerCase().includes(filtroTexto) ||
-      (o.cidade ?? "").toLowerCase().includes(filtroTexto) ||
-      (o.responsavel ?? "").toLowerCase().includes(filtroTexto)
-    );
-  });
-
-  // -----------------------
-  // Navegação
-  // -----------------------
   function voltarInicio() {
     goto("/");
   }
 
-  function handleKeyOpen(ev: KeyboardEvent, id: string) {
-    if (ev.key === "Enter" || ev.key === " ") {
-      ev.preventDefault();
-      abrirDetalhes(id);
-    }
-  }
-
-  onMount(() => {
-    carregarListas();
-  });
+  onMount(carregarListas);
 </script>
 
-<!-- ===========================
-       White Pro Layout
-=========================== -->
+<!-- =====================
+     HTML COMPLETO
+===================== -->
 <div class="wrp">
   <header class="header">
     <div class="brand">
@@ -295,263 +262,198 @@
     </div>
 
     <div class="header-actions">
-      <button class="btn-ghost" on:click={voltarInicio} aria-label="Voltar para portal">
-        ← Voltar ao Portal
-      </button>
+      <button class="btn-ghost" on:click={voltarInicio}>← Voltar</button>
+      <button class="btn-primary" on:click={ativarNotificacoes}>🔔 Ativar notificações</button>
     </div>
   </header>
+<nav class="nav">
+  <button
+    class="tab {ativo === 'oticas' ? 'active' : ''}"
+    on:click={() => (ativo = 'oticas')}
+  >
+    Óticas
+  </button>
 
-  <nav class="nav">
-    <button class="tab {ativo === 'oticas' ? 'active' : ''}" on:click={() => (ativo = "oticas")}>
-      Óticas
-    </button>
-    <button class="tab {ativo === 'detalhes' ? 'active' : ''}" on:click={() => (ativo = "detalhes")} disabled={!oticaSelecionada}>
-      Detalhes
-    </button>
-  </nav>
+  <button
+    class="tab {ativo === 'detalhes' ? 'active' : ''}"
+    disabled={!oticaSelecionada}
+    on:click={() => (ativo = 'detalhes')}
+  >
+    Detalhes
+  </button>
+</nav>
 
-  <main class="content">
-    {#if ativo === "oticas"}
-      <div class="controls">
-        <div class="search">
-          <input placeholder="Pesquisar por nome, cidade ou responsável" bind:value={busca} />
-        </div>
-
-        <div class="filters">
-          <label>
-            Cidade
-            <select bind:value={cidadeFilter}>
-              {#each cidades as c}
-                <option value={c}>{c}</option>
-              {/each}
-            </select>
-          </label>
-
-          <label>
-            Ver
-            <select bind:value={sub}>
-              <option value="todas">Todas</option>
-              <option value="temperatura">Temperatura</option>
-              <option value="novas">Novas</option>
-            </select>
-          </label>
-        </div>
-      </div>
-
-      {#if carregandoListas}
-        <div class="state">Carregando óticas...</div>
-      {:else}
-        <!-- SUB-VIEW: TODAS (com busca/cidade) -->
-        {#if sub === "todas"}
-          <div class="list">
-            {#each filtradas as o (o.id)}
-              <div
-                class="card"
-                role="button"
-                tabindex="0"
-                on:click={() => abrirDetalhes(o.id)}
-                on:keydown={(e) => handleKeyOpen(e, o.id)}
-              >
-                <div class="left">
-                  <div class="c-title">{o.nome}</div>
-                  <div class="c-sub">{o.cidade} • {o.uf}</div>
-                </div>
-
-                <div class="right">
-                  <div class="meta">
-                    <div class="chip temp">{o.temperatura ?? "—"}</div>
-                    {#if lastContactMap[o.id]}
-                      {#if daysSince(lastContactMap[o.id]) <= 7}
-                        <div class="badge ok" title={"Último contato: " + formatDateShort(lastContactMap[o.id])}>Recent</div>
-                      {:else if daysSince(lastContactMap[o.id]) <= 30}
-                        <div class="badge warn" title={"Último contato: " + formatDateShort(lastContactMap[o.id])}>7–30d</div>
-                      {:else}
-                        <div class="badge cold" title={"Último contato: " + formatDateShort(lastContactMap[o.id])}>+30d</div>
-                      {/if}
-                    {:else}
-                      <div class="badge none" title="Sem contato">—</div>
-                    {/if}
-                  </div>
-
-                  <div class="caret">›</div>
-                </div>
-              </div>
-            {/each}
-
-            {#if filtradas.length === 0}
-              <div class="state">Nenhuma ótica encontrada.</div>
-            {/if}
-          </div>
-        {/if}
-
-        <!-- SUB-VIEW: TEMPERATURA (agrupada QUENTE/MORNO/FRIO) -->
-        {#if sub === "temperatura"}
-          <div class="temp-sections">
-            {#each tempSections as sec}
-              <section class="temp-block">
-                <h3 class="temp-heading">{sec}</h3>
-                {#if porTemperaturaGrouped[sec].length === 0}
-                  <div class="state small">Nenhuma ótica nesta categoria.</div>
-                {:else}
-                  <div class="list">
-                    {#each porTemperaturaGrouped[sec] as o (o.id)}
-                      <div
-                        class="card"
-                        role="button"
-                        tabindex="0"
-                        on:click={() => abrirDetalhes(o.id)}
-                        on:keydown={(e) => handleKeyOpen(e, o.id)}
-                      >
-                        <div class="left">
-                          <div class="c-title">{o.nome}</div>
-                          <div class="c-sub">{o.cidade} • {o.uf}</div>
-                        </div>
-
-                        <div class="right">
-                          <div class="meta">
-                            <div class="chip temp">{o.temperatura}</div>
-                            {#if lastContactMap[o.id]}
-                              {#if daysSince(lastContactMap[o.id]) <= 7}
-                                <div class="badge ok">Recent</div>
-                              {:else if daysSince(lastContactMap[o.id]) <= 30}
-                                <div class="badge warn">7–30d</div>
-                              {:else}
-                                <div class="badge cold">+30d</div>
-                              {/if}
-                            {:else}
-                              <div class="badge none">—</div>
-                            {/if}
-                          </div>
-
-                          <div class="caret">›</div>
-                        </div>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </section>
-            {/each}
-          </div>
-        {/if}
-
-        <!-- SUB-VIEW: NOVAS -->
-        {#if sub === "novas"}
-          <div class="list">
-            {#each novasOtica as o (o.id)}
-              <div
-                class="card"
-                role="button"
-                tabindex="0"
-                on:click={() => abrirDetalhes(o.id)}
-                on:keydown={(e) => handleKeyOpen(e, o.id)}
-              >
-                <div class="left">
-                  <div class="c-title">{o.nome}</div>
-                  <div class="c-sub">Criada em {formatDateShort(o.created_at)}</div>
-                </div>
-
-                <div class="right">
-                  <div class="chip new">Nova</div>
-                  <div class="caret">›</div>
-                </div>
-              </div>
-            {/each}
-
-            {#if novasOtica.length === 0}
-              <div class="state">Nenhuma ótica nova.</div>
-            {/if}
-          </div>
-        {/if}
-      {/if}
-    {/if}
-
-    <!-- =============================
-         TAB DETALHES
-    ============================== -->
-    {#if ativo === "detalhes"}
-      {#if carregandoOtica}
-        <div class="state">Carregando detalhes...</div>
-      {:else}
-        {#if detalhes}
-          <article class="details">
-            <div class="d-header">
-              <div>
-                <h2 class="d-title">{detalhes.nome}</h2>
-                <div class="d-sub">{detalhes.cidade} • {detalhes.uf}</div>
-              </div>
-
-              <div class="d-actions">
-                <button class="btn-primary" on:click={() => marcarContatoRapido()}>
-                  {#if salvandoContato}Salvando...{:else}Já entrei em contato{/if}
-                </button>
-
-                <button class="btn-ghost" on:click={voltarInicio}>Voltar</button>
+<main class="content">
+  <!-- =========================
+       LISTAGEM DE ÓTICAS
+  ========================== -->
+  {#if ativo === 'oticas'}
+    {#if carregandoListas}
+      <div class="state">Carregando óticas...</div>
+    {:else}
+      <div class="list">
+        {#each todasOtica as o (o.id)}
+          <div
+            class="card"
+            role="button"
+            tabindex="0"
+            on:click={() => abrirDetalhes(o.id)}
+          >
+            <div class="left">
+              <div class="c-title">{o.nome}</div>
+              <div class="c-sub">
+                {o.cidade} • {o.uf}
               </div>
             </div>
 
-            <section class="panel">
-              <h3 class="p-title">Informações</h3>
-              <div class="grid">
-                <div>
-                  <b>Responsável</b>
-                  <div class="muted">{detalhes.responsavel ?? "—"}</div>
-                </div>
+            <div class="right">
+              <div class="meta">
+                <div class="chip temp">{o.temperatura ?? '—'}</div>
 
-                <div>
-                  <b>Telefone</b>
-                  <div class="muted">{detalhes.telefone ?? "—"}</div>
-                </div>
-
-                <div>
-                  <b>Temperatura</b>
-                  <div class="muted">{detalhes.temperatura ?? "—"}</div>
-                </div>
-
-                <div>
-                  <b>Origem</b>
-                  <div class="muted">{detalhes.origem ?? "—"}</div>
-                </div>
-
-                <div>
-                  <b>Localização</b>
-                  {#if detalhes.link_google_maps}
-                    <a class="maps" href={detalhes.link_google_maps} target="_blank">Abrir no mapa →</a>
+                {#if lastContactMap[o.id]}
+                  {#if daysSince(lastContactMap[o.id]) <= 7}
+                    <div class="badge ok">Recent</div>
+                  {:else if daysSince(lastContactMap[o.id]) <= 30}
+                    <div class="badge warn">7–30d</div>
                   {:else}
-                    <div class="muted">Não informado</div>
+                    <div class="badge cold">+30d</div>
                   {/if}
-                </div>
+                {:else}
+                  <div class="badge none">—</div>
+                {/if}
               </div>
-            </section>
 
-            <section class="panel">
-              <h3 class="p-title">Contatos Recentes</h3>
+              <div class="caret">›</div>
+            </div>
+          </div>
+        {/each}
 
-              {#if contatos.length === 0}
-                <div class="muted">Nenhum contato registrado.</div>
-              {:else}
-                <div class="list-contacts">
-                  {#each contatos as c (c.id)}
-                    <div class="contact">
-                      <div class="c-left">
-                        <div class="c-meio">{c.meio}</div>
-                        <div class="muted">{formatDateShort(c.created_at)}</div>
-                      </div>
-                      <div class="c-note">{c.nota}</div>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            </section>
-          </article>
-        {:else}
-          <div class="state">Selecione uma ótica para ver os detalhes.</div>
+        {#if todasOtica.length === 0}
+          <div class="state">Nenhuma ótica encontrada.</div>
         {/if}
-      {/if}
+      </div>
     {/if}
-  </main>
+  {/if}
+
+  <!-- =========================
+       DETALHES DA ÓTICA
+  ========================== -->
+  {#if ativo === 'detalhes'}
+    {#if carregandoOtica}
+      <div class="state">Carregando detalhes...</div>
+    {:else if detalhes}
+      <article class="details">
+        <div class="d-header">
+          <div>
+            <h2 class="d-title">{detalhes.nome}</h2>
+            <div class="d-sub">
+              {detalhes.cidade} • {detalhes.uf}
+            </div>
+          </div>
+
+          <div class="d-actions">
+            <button
+              class="btn-primary"
+              disabled={salvandoContato}
+              on:click={() => marcarContatoRapido(detalhes.id)}
+            >
+              {#if salvandoContato}
+                Salvando...
+              {:else}
+                Já entrei em contato
+              {/if}
+            </button>
+
+            <button class="btn-ghost" on:click={() => (ativo = 'oticas')}>
+              Voltar
+            </button>
+          </div>
+        </div>
+
+        <!-- INFORMAÇÕES -->
+        <section class="panel">
+          <h3 class="p-title">Informações</h3>
+
+          <div class="grid">
+            <div>
+              <b>Responsável</b>
+              <div class="muted">{detalhes.responsavel ?? '—'}</div>
+            </div>
+
+            <div>
+              <b>Telefone</b>
+              <div class="muted">{detalhes.telefone ?? '—'}</div>
+            </div>
+
+            <div>
+              <b>Temperatura</b>
+              <div class="muted">{detalhes.temperatura ?? '—'}</div>
+            </div>
+
+            <div>
+              <b>Origem</b>
+              <div class="muted">{detalhes.origem ?? '—'}</div>
+            </div>
+
+            <div>
+              <b>Localização</b>
+              {#if detalhes.link_google_maps}
+                <a
+                  class="maps"
+                  href={detalhes.link_google_maps}
+                  target="_blank"
+                >
+                  Abrir no mapa →
+                </a>
+              {:else}
+                <div class="muted">Não informado</div>
+              {/if}
+            </div>
+
+            {#if detalhes.liberada && detalhes.observacao}
+              <div>
+                <b>Observação do SDR</b>
+                <div class="obs-box">{detalhes.observacao}</div>
+              </div>
+            {/if}
+          </div>
+        </section>
+
+        <!-- HISTÓRICO DE CONTATOS -->
+        <section class="panel">
+          <h3 class="p-title">Histórico de Contatos</h3>
+
+          {#if contatos.length === 0}
+            <div class="muted">Nenhum contato registrado.</div>
+          {:else}
+            <div class="list-contacts">
+              {#each contatos as c (c.id)}
+                <div class="contact">
+                  <div class="c-left">
+                    <div class="c-meio">{c.meio}</div>
+                    <div class="muted">
+                      {formatDateShort(c.created_at)}
+                    </div>
+                  </div>
+
+                  <div class="c-note">{c.nota}</div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      </article>
+    {:else}
+      <div class="state">Selecione uma ótica para ver os detalhes.</div>
+    {/if}
+  {/if}
+</main>
+
+  <!-- (restante do HTML e CSS permanece exatamente como no seu arquivo atual) -->
 </div>
 
 <style>
+
   :global(:root) {
     --bg: #f7f9fb;
     --card: #ffffff;
@@ -667,4 +569,27 @@
 
   .state { text-align:center; color:var(--muted); margin-top:12px; }
   .state.small { font-size:13px; }
+  /* === Observação SDR (adição segura) === */
+.obs-preview {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.obs-box {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  color: #065f46;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 </style>
+
