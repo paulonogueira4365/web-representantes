@@ -34,10 +34,12 @@ async function ativarNotificacoes() {
   .from("push_subscriptions")
   .upsert(
     {
-      representante_id: representanteId,
-      fcm_token: token
+      representante_id,
+      fcm_token: token,
     },
-    { onConflict: "representante_id,fcm_token" }
+    {
+      onConflict: "representante_id,fcm_token",
+    }
   );
 
 

@@ -1,6 +1,3 @@
 {
-  "compilerOptions": {
-    "lib": ["deno.window"],
-    "types": ["https://deno.land/x/types/index.d.ts"]
-  }
+  "verify_jwt": false
 }
