@@ -2,59 +2,85 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { supabase } from "$lib/supabase";
- 
-
-
-async function ativarNotificacoes() {
-  if (typeof window === "undefined") return;
-
-  if (!("serviceWorker" in navigator)) {
-    alert("Navegador não suporta Service Worker");
-    return;
-  }
-
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    alert("Notificações bloqueadas");
-    return;
-  }
-
-  // 🔥 registra o SW
-  await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-
-  const { registrarFCM } = await import("$lib/firebase");
-  const token = await registrarFCM();
-
-  if (!token) {
-    alert("Token FCM não gerado");
-    return;
-  }
-
-  await supabase
-  .from("push_subscriptions")
-  .upsert(
-    {
-      representante_id: representanteId,
-      fcm_token: token,
-    },
-    {
-      onConflict: "representante_id,fcm_token",
-    }
-  );
-
-
-  alert("Notificações ativadas com sucesso 🔔");
-}
-
-
-
 
   /* =====================
-     DADOS INICIAIS
+     DADOS DA ROTA
   ===================== */
   export let data: { id: string };
   const representanteId = data.id;
-console.log("REPRESENTANTE ID DA ROTA:", representanteId);
+  console.log("REPRESENTANTE ID DA ROTA:", representanteId);
+
+  /* =====================
+     NOTIFICAÇÕES
+  ===================== */
+  let notificacoesAtivas = false;
+  let ativandoNotificacao = false;
+
+  async function verificarNotificacaoAtiva() {
+    const { data, error } = await supabase
+      .from("push_subscriptions")
+      .select("id")
+      .eq("representante_id", representanteId)
+      .limit(1);
+
+    if (!error) {
+      notificacoesAtivas = !!data?.length;
+    }
+  }
+
+  async function ativarNotificacoes() {
+    if (ativandoNotificacao || notificacoesAtivas) return;
+    if (typeof window === "undefined") return;
+
+    if (!("serviceWorker" in navigator)) {
+      alert("Navegador não suporta notificações");
+      return;
+    }
+
+    ativandoNotificacao = true;
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        alert("Permissão negada");
+        return;
+      }
+
+      // registra o Service Worker
+      const registration = await navigator.serviceWorker.register(
+        "/firebase-messaging-sw.js"
+      );
+
+      await navigator.serviceWorker.ready;
+
+      // importa FCM
+      const { registrarFCM } = await import("$lib/firebase");
+      const token = await registrarFCM(registration);
+
+      if (!token) {
+        alert("Token FCM não gerado");
+        return;
+      }
+
+      await supabase.from("push_subscriptions").upsert(
+        {
+          representante_id: representanteId,
+          fcm_token: token,
+        },
+        {
+          onConflict: "representante_id,fcm_token",
+        }
+      );
+
+      notificacoesAtivas = true;
+      alert("Notificações ativadas 🔔");
+    } catch (err) {
+      console.error("Erro ao ativar notificações:", err);
+      alert("Erro ao ativar notificações");
+    } finally {
+      ativandoNotificacao = false;
+    }
+  }
 
   /* =====================
      TIPOS
@@ -87,14 +113,8 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
      ESTADO
   ===================== */
   let ativo: "oticas" | "detalhes" = "oticas";
-  let sub: "todas" | "temperatura" | "novas" = "todas";
 
   let todasOtica: OticaRow[] = [];
-  let temperaturaOtica: OticaRow[] = [];
-  let novasOtica: OticaRow[] = [];
-
-  let busca = "";
-  let cidadeFilter = "Todas";
   let cidades: string[] = [];
 
   let lastContactMap: Record<string, string | null> = {};
@@ -106,8 +126,6 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
   let carregandoListas = true;
   let carregandoOtica = false;
   let salvandoContato = false;
-
-  const tempSections = ["QUENTE", "MORNO", "FRIO"] as const;
 
   /* =====================
      HELPERS
@@ -124,69 +142,49 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
     );
   }
 
-  const tempOrder = (t: string | null) =>
-    t === "QUENTE" ? 1 : t === "MORNO" ? 2 : t === "FRIO" ? 3 : 99;
-
-  /* =====================
-     NOTIFICAÇÕES
-  ===================== */
- 
   /* =====================
      LISTAGEM
   ===================== */
   async function carregarListas() {
-  carregandoListas = true;
+    carregandoListas = true;
 
-  try {
-    const { data: todas, error: e1 } = await supabase
-      .from("view_oticas_representante")
-      .select("*")
-      .eq("representante_id", representanteId);
+    try {
+      const { data, error } = await supabase
+        .from("view_oticas_representante")
+        .select("*")
+        .eq("representante_id", representanteId);
 
-    if (e1) {
-      console.error("Erro view_oticas_representante:", e1);
-      todasOtica = [];
-      carregandoListas = false;
-      return;
-    }
+      if (error) {
+        console.error(error);
+        todasOtica = [];
+        return;
+      }
 
-    todasOtica = (todas ?? []) as OticaRow[];
+      todasOtica = data as OticaRow[];
 
-    // cidades
-    const citySet = new Set<string>();
-    todasOtica.forEach((o) => {
-      if (o.cidade) citySet.add(o.cidade);
-    });
-    cidades = ["Todas", ...Array.from(citySet).sort()];
+      const citySet = new Set<string>();
+      todasOtica.forEach((o) => o.cidade && citySet.add(o.cidade));
+      cidades = ["Todas", ...Array.from(citySet).sort()];
 
-    // últimos contatos
-    const oticaIds = todasOtica.map((o) => o.id);
+      const ids = todasOtica.map((o) => o.id);
+      if (ids.length) {
+        const { data: contatosAll } = await supabase
+          .from("view_contatos_otica")
+          .select("otica_id, created_at")
+          .in("otica_id", ids)
+          .order("created_at", { ascending: false });
 
-    if (oticaIds.length > 0) {
-      const { data: contatosAll, error: e4 } = await supabase
-        .from("view_contatos_otica")
-        .select("otica_id, created_at")
-        .in("otica_id", oticaIds)
-        .order("created_at", { ascending: false });
-
-      if (!e4) {
         lastContactMap = {};
-        (contatosAll ?? []).forEach((c: any) => {
+        contatosAll?.forEach((c: any) => {
           if (!lastContactMap[c.otica_id]) {
             lastContactMap[c.otica_id] = c.created_at;
           }
         });
       }
+    } finally {
+      carregandoListas = false;
     }
-
-  } catch (err) {
-    console.error("Erro geral ao carregar listas:", err);
-    todasOtica = [];
-  } finally {
-    carregandoListas = false;
   }
-}
-
 
   /* =====================
      DETALHES
@@ -217,18 +215,18 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
   }
 
   /* =====================
-     MARCAR CONTATO
+     CONTATO RÁPIDO
   ===================== */
   async function marcarContatoRapido(
     oticaId: string,
     meio = "CHECK",
     nota = "Representante confirmou contato"
   ) {
-    if (!oticaId || !detalhes || salvandoContato) return;
+    if (!detalhes || salvandoContato) return;
 
     const hoje = new Date().toISOString().slice(0, 10);
     if (lastContactMap[oticaId]?.slice(0, 10) === hoje) {
-      alert("Você já registrou contato com esta ótica hoje.");
+      alert("Você já registrou contato hoje.");
       return;
     }
 
@@ -258,7 +256,6 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
 
       lastContactMap[oticaId] = contato.created_at;
       contatos = [contato, ...contatos];
-
     } finally {
       salvandoContato = false;
     }
@@ -268,7 +265,10 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
     goto("/");
   }
 
-  onMount(carregarListas);
+  onMount(() => {
+    verificarNotificacaoAtiva();
+    carregarListas();
+  });
 </script>
 
 <!-- =====================
@@ -286,7 +286,14 @@ console.log("REPRESENTANTE ID DA ROTA:", representanteId);
 
     <div class="header-actions">
       <button class="btn-ghost" on:click={voltarInicio}>← Voltar</button>
-      <button class="btn-primary" on:click={ativarNotificacoes}>🔔 Ativar notificações</button>
+     <button
+  class="btn-primary"
+  disabled={notificacoesAtivas}
+  on:click={ativarNotificacoes}
+>
+  {notificacoesAtivas ? "🔔 Notificações ativas" : "🔔 Ativar notificações"}
+</button>
+
     </div>
   </header>
 <nav class="nav">

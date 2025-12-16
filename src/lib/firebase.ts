@@ -1,5 +1,5 @@
 // src/lib/firebase.ts
-import { initializeApp, getApps } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getMessaging, getToken } from "firebase/messaging";
 
 const firebaseConfig = {
@@ -11,12 +11,15 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-const app =
-  getApps().length === 0
-    ? initializeApp(firebaseConfig)
-    : getApps()[0];
+// 🔒 garante singleton
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
-export async function registrarFCM() {
+/**
+ * Registra o FCM corretamente usando Service Worker
+ */
+export async function registrarFCM(
+  registration: ServiceWorkerRegistration
+): Promise<string> {
   if (typeof window === "undefined") {
     throw new Error("FCM só pode rodar no browser");
   }
@@ -24,7 +27,8 @@ export async function registrarFCM() {
   const messaging = getMessaging(app);
 
   const token = await getToken(messaging, {
-    vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY
+    vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
+    serviceWorkerRegistration: registration
   });
 
   if (!token) {
