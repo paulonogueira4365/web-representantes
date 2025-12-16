@@ -34,7 +34,7 @@ async function ativarNotificacoes() {
   .from("push_subscriptions")
   .upsert(
     {
-      representante_id,
+      representante_id: representanteId,
       fcm_token: token,
     },
     {
