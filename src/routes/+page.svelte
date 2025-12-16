@@ -1,186 +1,199 @@
 <script lang="ts">
-	import { supabase } from "$lib/supabase";
-	import { onMount } from "svelte";
-	import { goto } from "$app/navigation";
+  import { supabase } from "$lib/supabase";
+  import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
 
-	type Representante = {
-		id: string;
-		nome: string;
-	};
-onMount(() => {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/firebase-messaging-sw.js");
+  type RepresentanteUI = {
+    id: string;
+    nome: string;
+    oticasLiberadas: number;
+    oticasComContato: number;
+    oticasSemContato: number;
+  };
+
+  let representantes: RepresentanteUI[] = [];
+  let carregando = true;
+  let erro: string | null = null;
+
+  async function carregar() {
+    carregando = true;
+    erro = null;
+
+    /* Representantes */
+    const { data: reps, error: repError } = await supabase
+      .from("representantes")
+      .select("id, nome")
+      .order("nome");
+
+    if (repError) {
+      erro = repError.message;
+      carregando = false;
+      return;
+    }
+
+    const resultado: RepresentanteUI[] = [];
+
+    for (const rep of reps ?? []) {
+
+      /* Óticas LIBERADAS */
+      const { data: oticas } = await supabase
+        .from("oticas")
+        .select("id")
+        .eq("representante_id", rep.id)
+        .eq("liberada", true);
+
+      const oticaIds = oticas?.map(o => o.id) ?? [];
+      const totalLiberadas = oticaIds.length;
+
+      let comContato = 0;
+
+      if (oticaIds.length > 0) {
+        /* SOMENTE CHECK DO REPRESENTANTE */
+        const { data: historico } = await supabase
+          .from("view_contatos_otica")
+          .select("otica_id")
+          .in("otica_id", oticaIds)
+          .eq("meio", "CHECK");
+
+        const oticasComContato = new Set(
+          historico?.map(h => h.otica_id) ?? []
+        );
+
+        comContato = oticasComContato.size;
+      }
+
+      resultado.push({
+        id: rep.id,
+        nome: rep.nome,
+        oticasLiberadas: totalLiberadas,
+        oticasComContato: comContato,
+        oticasSemContato: totalLiberadas - comContato
+      });
+    }
+
+    representantes = resultado;
+    carregando = false;
   }
-});
 
-	let representantes: Representante[] = [];
-	let carregando = true;
-	let erro: string | null = null;
+  function abrir(id: string) {
+    goto(`/representante/${id}`);
+  }
 
-	async function carregarRepresentantes() {
-		carregando = true;
-		erro = null;
-
-		try {
-			const { data, error } = await supabase
-				.from("representantes")
-				.select("id, nome")
-				.order("nome", { ascending: true });
-
-			if (error) {
-				console.error(error);
-				erro = error.message;
-				representantes = [];
-			} else {
-				representantes = data ?? [];
-			}
-		} catch (e) {
-			console.error(e);
-			erro = "Erro inesperado";
-			representantes = [];
-		}
-
-		carregando = false;
-	}
-
-	onMount(() => {
-		carregarRepresentantes();
-	});
-
-	function abrirPainel(id: string) {
-		goto(`/representante/${id}`);
-	}
-
-	function handleKey(ev: KeyboardEvent, id: string) {
-		if (ev.key === "Enter" || ev.key === " ") {
-			ev.preventDefault();
-			abrirPainel(id);
-		}
-	}
+  onMount(carregar);
 </script>
 
 <div class="root">
-	<div class="logo-wrap">
-		<img src="/uplab-logo.jpg" alt="UPLAB" class="logo" />
-	</div>
+  <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
 
-	<h1 class="title">Portal UPLAB</h1>
-	<p class="subtitle">Acesse seu painel de representante</p>
+  <h1 class="title">Portal UPLAB</h1>
+  <p class="subtitle">SELECIONE SEU USUARIO</p>
 
-	{#if carregando}
-		<div class="state">Carregando representantes...</div>
-	{:else if erro}
-		<div class="state error">Erro: {erro}</div>
-	{:else}
-		<div class="list">
-			{#each representantes as rep (rep.id)}
-				<div
-					class="card"
-					role="button"
-					tabindex="0"
-					on:click={() => abrirPainel(rep.id)}
-					on:keydown={(e) => handleKey(e, rep.id)}
-				>
-					<span class="name">{rep.nome}</span>
-					<span class="caret">›</span>
-				</div>
-			{/each}
-
-			{#if representantes.length === 0}
-				<div class="state">Nenhum representante encontrado.</div>
-			{/if}
-		</div>
-	{/if}
+  {#if carregando}
+    <div class="state">Carregando…</div>
+  {:else if erro}
+    <div class="state error">{erro}</div>
+  {:else}
+    <div class="list">
+      {#each representantes as r (r.id)}
+        <button class="card" on:click={() => abrir(r.id)}>
+          <div class="info">
+            <div class="nome">{r.nome}</div>
+            <div class="stats">
+              <span class="ok">✔ {r.oticasLiberadas} OTICAS NOVAS</span>
+              <span class="info-blue">✅ {r.oticasComContato} contato feito</span>
+              <span class="warn">⚠ {r.oticasSemContato} pendentes de contato</span>
+            </div>
+          </div>
+          <span class="caret">›</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
-	:global(:root) {
-		--bg: #f7f9fb;
-		--card: #ffffff;
-		--muted: #64748b;
-		--accent: #0ea5a3;
-		--radius: 12px;
-		--shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-	}
+  .root {
+    min-height: 100vh;
+    padding: 24px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--bg);
+  }
 
-	.root {
-		min-height: 100vh;
-		padding: 40px 24px;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		background: var(--bg);
-		font-family: Inter, sans-serif;
-	}
+  .logo {
+    width: 72px;
+    margin: 24px 0 16px;
+    border-radius: 16px;
+  }
 
-	.logo-wrap {
-		background: var(--card);
-		padding: 16px;
-		border-radius: var(--radius);
-		border: 1px solid #e2e8f0;
-		box-shadow: var(--shadow);
-		margin-bottom: 14px;
-	}
+  .title {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 800;
+  }
 
-	.logo {
-		width: 70px;
-	}
+  .subtitle {
+    margin: 6px 0 20px;
+    color: var(--muted);
+  }
 
-	.title {
-		margin: 10px 0 4px;
-		font-size: 28px;
-		font-weight: 700;
-		color: #0f172a;
-	}
+  .list {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
 
-	.subtitle {
-		color: var(--muted);
-		font-size: 15px;
-		margin-bottom: 24px;
-	}
+  .card {
+    all: unset;
+    background: var(--card);
+    padding: 18px 20px;
+    border-radius: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+  }
 
-	.state {
-		color: var(--muted);
-		margin-top: 18px;
-		font-size: 15px;
-	}
+  .card:active {
+    transform: scale(0.97);
+  }
 
-	.state.error {
-		color: #c62828;
-	}
+  .info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
-	.list {
-		width: 100%;
-		max-width: 450px;
-		display: grid;
-		gap: 12px;
-	}
+  .nome {
+    font-weight: 700;
+  }
 
-	.card {
-		background: var(--card);
-		border: 1px solid #e2e8f0;
-		padding: 16px 18px;
-		border-radius: var(--radius);
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		box-shadow: var(--shadow);
-		cursor: pointer;
-		transition: 0.15s;
-	}
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 13px;
+  }
 
-	.card:hover {
-		transform: translateY(-3px);
-	}
+  .ok { color: #16a34a; }
+  .info-blue { color: #2563eb; }
+  .warn { color: #d97706; }
 
-	.name {
-		font-size: 18px;
-		font-weight: 600;
-		color: #0f172a;
-	}
+  .caret {
+    font-size: 22px;
+    color: var(--muted);
+  }
 
-	.caret {
-		font-size: 22px;
-		color: var(--muted);
-	}
+  .state {
+    margin-top: 24px;
+    color: var(--muted);
+  }
+
+  .state.error {
+    color: #dc2626;
+  }
 </style>
