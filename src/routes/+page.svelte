@@ -19,7 +19,7 @@
     carregando = true;
     erro = null;
 
-    /* Representantes */
+    /* REPRESENTANTES */
     const { data: reps, error: repError } = await supabase
       .from("representantes")
       .select("id, nome")
@@ -34,29 +34,29 @@
     const resultado: RepresentanteUI[] = [];
 
     for (const rep of reps ?? []) {
-
-      /* Óticas LIBERADAS */
-      const { data: oticas } = await supabase
+      /* ÓTICAS LIBERADAS DO REPRESENTANTE */
+      const { data: oticas, error: oticaError } = await supabase
         .from("oticas")
         .select("id")
         .eq("representante_id", rep.id)
         .eq("liberada", true);
 
-      const oticaIds = oticas?.map(o => o.id) ?? [];
+      if (oticaError) continue;
+
+      const oticaIds = oticas?.map((o) => o.id) ?? [];
       const totalLiberadas = oticaIds.length;
 
       let comContato = 0;
 
       if (oticaIds.length > 0) {
-        /* SOMENTE CHECK DO REPRESENTANTE */
-        const { data: historico } = await supabase
-          .from("view_contatos_otica")
+        /* CONTATOS REAIS (QUALQUER CONTATO JÁ REGISTRADO) */
+        const { data: contatos } = await supabase
+          .from("contatos")
           .select("otica_id")
-          .in("otica_id", oticaIds)
-          .eq("meio", "CHECK");
+          .in("otica_id", oticaIds);
 
         const oticasComContato = new Set(
-          historico?.map(h => h.otica_id) ?? []
+          contatos?.map((c) => c.otica_id) ?? []
         );
 
         comContato = oticasComContato.size;
@@ -86,7 +86,7 @@
   <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
 
   <h1 class="title">Portal UPLAB</h1>
-  <p class="subtitle">SELECIONE SEU USUARIO</p>
+  <p class="subtitle">SELECIONE SEU USUÁRIO</p>
 
   {#if carregando}
     <div class="state">Carregando…</div>
@@ -99,9 +99,9 @@
           <div class="info">
             <div class="nome">{r.nome}</div>
             <div class="stats">
-              <span class="ok">✔ {r.oticasLiberadas} OTICAS NOVAS</span>
-              <span class="info-blue">✅ {r.oticasComContato} contato feito</span>
-              <span class="warn">⚠ {r.oticasSemContato} pendentes de contato</span>
+              <span class="ok">✔ {r.oticasLiberadas} óticas liberadas</span>
+              <span class="info-blue">✅ {r.oticasComContato} com contato</span>
+              <span class="warn">⚠ {r.oticasSemContato} pendentes</span>
             </div>
           </div>
           <span class="caret">›</span>

@@ -4,622 +4,301 @@
   import { supabase } from "$lib/supabase";
 
   /* =====================
-     DADOS DA ROTA
+     PROPS (Svelte 5)
   ===================== */
-  export let data: { id: string };
-  const representanteId = data.id;
-  console.log("REPRESENTANTE ID DA ROTA:", representanteId);
-
-  /* =====================
-     NOTIFICAÇÕES
-  ===================== */
-  let notificacoesAtivas = false;
-  let ativandoNotificacao = false;
-
-  async function verificarNotificacaoAtiva() {
-    const { data, error } = await supabase
-      .from("push_subscriptions")
-      .select("id")
-      .eq("representante_id", representanteId)
-      .limit(1);
-
-    if (!error) {
-      notificacoesAtivas = !!data?.length;
-    }
-  }
-
-  async function ativarNotificacoes() {
-    if (ativandoNotificacao || notificacoesAtivas) return;
-    if (typeof window === "undefined") return;
-
-    if (!("serviceWorker" in navigator)) {
-      alert("Navegador não suporta notificações");
-      return;
-    }
-
-    ativandoNotificacao = true;
-
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") {
-        alert("Permissão negada");
-        return;
-      }
-
-      // registra o Service Worker
-      const registration = await navigator.serviceWorker.register(
-        "/firebase-messaging-sw.js"
-      );
-
-      await navigator.serviceWorker.ready;
-
-      // importa FCM
-      const { registrarFCM } = await import("$lib/firebase");
-      const token = await registrarFCM(registration);
-
-      if (!token) {
-        alert("Token FCM não gerado");
-        return;
-      }
-
-      await supabase.from("push_subscriptions").upsert(
-        {
-          representante_id: representanteId,
-          fcm_token: token,
-        },
-        {
-          onConflict: "representante_id,fcm_token",
-        }
-      );
-
-      notificacoesAtivas = true;
-      alert("Notificações ativadas 🔔");
-    } catch (err) {
-      console.error("Erro ao ativar notificações:", err);
-      alert("Erro ao ativar notificações");
-    } finally {
-      ativandoNotificacao = false;
-    }
-  }
+  const props = $props<{ data: { id: string } }>();
+  const representanteId = props.data.id;
 
   /* =====================
      TIPOS
   ===================== */
-  type OticaRow = {
+  type Otica = {
     id: string;
     nome: string;
-    cidade: string | null;
-    uf: string | null;
-    temperatura: "QUENTE" | "MORNO" | "FRIO" | string | null;
-    telefone: string | null;
-    responsavel: string | null;
-    origem: string | null;
-    link_google_maps: string | null;
-    created_at: string;
-    representante_id: string | null;
+    cidade: string;
+    uf: string;
+    telefone: string;
+    responsavel: string;
+    origem: string;
+    funil_etapa: string;
     liberada: boolean;
+    status: string;
     observacao: string | null;
+    link_google_maps: string | null;
+    representante_nome: string;
+    representante_id: string;
+    created_at: string;
+    contato_em: string | null;
+    pode_marcar_contato: boolean;
   };
 
-  type ContatoRow = {
+  type Contato = {
     id: string;
-    otica_id: string;
-    meio: string | null;
-    nota: string | null;
+    status: string;
+    meio: string;
+    canal: string;
+    origem: string;
+    observacao: string | null;
     created_at: string;
   };
 
   /* =====================
-     ESTADO
+     STATE
   ===================== */
-  let ativo: "oticas" | "detalhes" = "oticas";
+  let view = $state<"lista" | "detalhes">("lista");
+  let oticas = $state<Otica[]>([]);
+  let oticaSelecionada = $state<Otica | null>(null);
+  let contatos = $state<Contato[]>([]);
 
-  let todasOtica: OticaRow[] = [];
-  let cidades: string[] = [];
-
-  let lastContactMap: Record<string, string | null> = {};
-
-  let oticaSelecionada: string | null = null;
-  let detalhes: OticaRow | null = null;
-  let contatos: ContatoRow[] = [];
-
-  let carregandoListas = true;
-  let carregandoOtica = false;
-  let salvandoContato = false;
+  let carregandoLista = $state(true);
+  let carregandoDetalhes = $state(false);
+  let salvandoContato = $state(false);
 
   /* =====================
      HELPERS
   ===================== */
-  function formatDateShort(d?: string | null) {
-    if (!d) return "—";
-    return new Date(d).toLocaleDateString();
+  function formatData(d?: string | null) {
+    return d ? new Date(d).toLocaleString("pt-BR") : "—";
   }
 
-  function daysSince(dateIso?: string | null) {
-    if (!dateIso) return Infinity;
-    return Math.floor(
-      (Date.now() - new Date(dateIso).getTime()) / (1000 * 60 * 60 * 24)
-    );
+  function isHoje(d?: string | null) {
+    if (!d) return false;
+    return d.slice(0, 10) === new Date().toISOString().slice(0, 10);
   }
 
   /* =====================
-     LISTAGEM
+     LISTA
   ===================== */
-  async function carregarListas() {
-    carregandoListas = true;
+  async function carregarOticas() {
+    carregandoLista = true;
 
-    try {
-      const { data, error } = await supabase
-        .from("view_oticas_representante")
-        .select("*")
-        .eq("representante_id", representanteId);
+    const { data } = await supabase
+      .from("vw_oticas_representante_cards")
+      .select("*")
+      .eq("representante_id", representanteId)
+      .order("created_at", { ascending: false });
 
-      if (error) {
-        console.error(error);
-        todasOtica = [];
-        return;
-      }
-
-      todasOtica = data as OticaRow[];
-
-      const citySet = new Set<string>();
-      todasOtica.forEach((o) => o.cidade && citySet.add(o.cidade));
-      cidades = ["Todas", ...Array.from(citySet).sort()];
-
-      const ids = todasOtica.map((o) => o.id);
-      if (ids.length) {
-        const { data: contatosAll } = await supabase
-          .from("view_contatos_otica")
-          .select("otica_id, created_at")
-          .in("otica_id", ids)
-          .order("created_at", { ascending: false });
-
-        lastContactMap = {};
-        contatosAll?.forEach((c: any) => {
-          if (!lastContactMap[c.otica_id]) {
-            lastContactMap[c.otica_id] = c.created_at;
-          }
-        });
-      }
-    } finally {
-      carregandoListas = false;
-    }
+    oticas = (data ?? []) as Otica[];
+    carregandoLista = false;
   }
 
   /* =====================
      DETALHES
   ===================== */
-  async function abrirDetalhes(id: string) {
-    ativo = "detalhes";
-    carregandoOtica = true;
-    oticaSelecionada = id;
+  async function abrirDetalhes(o: Otica) {
+    view = "detalhes";
+    oticaSelecionada = o;
+    carregandoDetalhes = true;
 
-    const { data: det } = await supabase
-      .from("oticas")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-
-    detalhes = det ?? null;
-
-    const { data: cont } = await supabase
-      .from("view_contatos_otica")
-      .select("*")
-      .eq("otica_id", id)
+    const { data } = await supabase
+      .from("contatos")
+      .select("id,status,meio,canal,origem,observacao,created_at")
+      .eq("otica_id", o.id)
       .order("created_at", { ascending: false });
 
-    contatos = cont ?? [];
-    lastContactMap[id] = contatos[0]?.created_at ?? null;
+    contatos = (data ?? []) as Contato[];
+    carregandoDetalhes = false;
+  }
 
-    carregandoOtica = false;
+  function voltar() {
+    view = "lista";
+    oticaSelecionada = null;
   }
 
   /* =====================
-     CONTATO RÁPIDO
+     MARCAR CONTATO
   ===================== */
-  async function marcarContatoRapido(
-    oticaId: string,
-    meio = "CHECK",
-    nota = "Representante confirmou contato"
-  ) {
-    if (!detalhes || salvandoContato) return;
+  async function marcarContato() {
+    if (!oticaSelecionada) return;
+    if (!oticaSelecionada.pode_marcar_contato) return;
 
-    const hoje = new Date().toISOString().slice(0, 10);
-    if (lastContactMap[oticaId]?.slice(0, 10) === hoje) {
-      alert("Você já registrou contato hoje.");
+    salvandoContato = true;
+    const agora = new Date().toISOString();
+
+    const { error } = await supabase.from("contatos").insert({
+      otica_id: oticaSelecionada.id,
+      representante_nome: oticaSelecionada.representante_nome,
+
+      meio: "MENSAGEM",
+      canal: "SISTEMA",
+      origem: "ATIVO",
+
+      status: "REALIZADO",
+      conta_comissao: true,
+      observacao: "Contato informado pelo representante"
+    });
+
+    if (error) {
+      console.error("Erro ao salvar contato:", error);
+      salvandoContato = false;
       return;
     }
 
-    salvandoContato = true;
+    oticaSelecionada = {
+      ...oticaSelecionada,
+      contato_em: agora,
+      pode_marcar_contato: false
+    };
 
-    try {
-      const { data: contato } = await supabase
-        .from("contatos")
-        .insert([{
-          otica_id: oticaId,
-          nome: detalhes.nome,
-          telefone: detalhes.telefone,
-          cidade: detalhes.cidade,
-          uf: detalhes.uf,
-          responsavel: detalhes.responsavel,
-          meio,
-          nota
-        }])
-        .select()
-        .single();
+    contatos = [
+      {
+        id: crypto.randomUUID(),
+        status: "REALIZADO",
+        meio: "MENSAGEM",
+        canal: "SISTEMA",
+        origem: "ATIVO",
+        observacao: "Contato informado pelo representante",
+        created_at: agora
+      },
+      ...contatos
+    ];
 
-      await supabase
-        .from("otica_representante")
-        .update({ contato_realizado_em: new Date().toISOString() })
-        .eq("otica_id", oticaId)
-        .eq("representante_id", representanteId);
-
-      lastContactMap[oticaId] = contato.created_at;
-      contatos = [contato, ...contatos];
-    } finally {
-      salvandoContato = false;
-    }
+    salvandoContato = false;
   }
 
-  function voltarInicio() {
-    goto("/");
-  }
-
-  onMount(() => {
-    verificarNotificacaoAtiva();
-    carregarListas();
-  });
+  onMount(carregarOticas);
 </script>
 
 <!-- =====================
-     HTML COMPLETO
+     TEMPLATE
 ===================== -->
 <div class="wrp">
   <header class="header">
-    <div class="brand">
-      <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
-      <div>
-        <h1 class="title">Painel do Representante</h1>
-        <p class="subtitle">Gerencie suas Óticas</p>
-      </div>
-    </div>
-
-    <div class="header-actions">
-      <button class="btn-ghost" on:click={voltarInicio}>← Voltar</button>
-     <button
-  class="btn-primary"
-  disabled={notificacoesAtivas}
-  on:click={ativarNotificacoes}
->
-  {notificacoesAtivas ? "🔔 Notificações ativas" : "🔔 Ativar notificações"}
-</button>
-
-    </div>
+    <h1>Painel do Representante</h1>
+    <button class="btn-ghost" onclick={() => goto("/")}>← Voltar</button>
   </header>
-<nav class="nav">
-  <button
-    class="tab {ativo === 'oticas' ? 'active' : ''}"
-    on:click={() => (ativo = 'oticas')}
-  >
-    Óticas
-  </button>
 
-  <button
-    class="tab {ativo === 'detalhes' ? 'active' : ''}"
-    disabled={!oticaSelecionada}
-    on:click={() => (ativo = 'detalhes')}
-  >
-    Detalhes
-  </button>
-</nav>
-
-<main class="content">
-  <!-- =========================
-       LISTAGEM DE ÓTICAS
-  ========================== -->
-  {#if ativo === 'oticas'}
-    {#if carregandoListas}
-      <div class="state">Carregando óticas...</div>
+  {#if view === "lista"}
+    {#if carregandoLista}
+      <p class="state">Carregando óticas...</p>
     {:else}
       <div class="list">
-        {#each todasOtica as o (o.id)}
-          <div
-            class="card"
-            role="button"
-            tabindex="0"
-            on:click={() => abrirDetalhes(o.id)}
-          >
-            <div class="left">
-              <div class="c-title">{o.nome}</div>
-              <div class="c-sub">
-                {o.cidade} • {o.uf}
-              </div>
+        {#each oticas as o (o.id)}
+          <button class="card" onclick={() => abrirDetalhes(o)}>
+            <div>
+              <div class="title">{o.nome}</div>
+              <div class="sub">{o.cidade} • {o.uf}</div>
             </div>
 
-            <div class="right">
-              <div class="meta">
-                <div class="chip temp">{o.temperatura ?? '—'}</div>
-
-                {#if lastContactMap[o.id]}
-                  {#if daysSince(lastContactMap[o.id]) <= 7}
-                    <div class="badge ok">Recent</div>
-                  {:else if daysSince(lastContactMap[o.id]) <= 30}
-                    <div class="badge warn">7–30d</div>
-                  {:else}
-                    <div class="badge cold">+30d</div>
-                  {/if}
-                {:else}
-                  <div class="badge none">—</div>
-                {/if}
-              </div>
-
-              <div class="caret">›</div>
-            </div>
-          </div>
+            <span class={o.pode_marcar_contato ? "pill warn" : "pill ok"}>
+              {o.pode_marcar_contato ? "Contato pendente" : "Contato realizado"}
+            </span>
+          </button>
         {/each}
-
-        {#if todasOtica.length === 0}
-          <div class="state">Nenhuma ótica encontrada.</div>
-        {/if}
       </div>
     {/if}
   {/if}
 
-  <!-- =========================
-       DETALHES DA ÓTICA
-  ========================== -->
-  {#if ativo === 'detalhes'}
-    {#if carregandoOtica}
-      <div class="state">Carregando detalhes...</div>
-    {:else if detalhes}
-      <article class="details">
-        <div class="d-header">
-          <div>
-            <h2 class="d-title">{detalhes.nome}</h2>
-            <div class="d-sub">
-              {detalhes.cidade} • {detalhes.uf}
-            </div>
-          </div>
+  {#if view === "detalhes" && oticaSelecionada}
+    <article class="details">
+      <h2>{oticaSelecionada.nome}</h2>
 
-          <div class="d-actions">
-            <button
-              class="btn-primary"
-              disabled={salvandoContato}
-             on:click={() => detalhes && marcarContatoRapido(detalhes.id)}
+      <div class="grid">
+        <div><b>Responsável</b><span>{oticaSelecionada.responsavel}</span></div>
+        <div><b>Telefone</b><span>{oticaSelecionada.telefone}</span></div>
+        <div><b>Cidade / UF</b><span>{oticaSelecionada.cidade} • {oticaSelecionada.uf}</span></div>
+        <div><b>Origem</b><span>{oticaSelecionada.origem}</span></div>
+        <div><b>Etapa do Funil</b><span>{oticaSelecionada.funil_etapa}</span></div>
+        <div><b>Status</b><span>{oticaSelecionada.status}</span></div>
+        <div><b>Cadastrada em</b><span>{formatData(oticaSelecionada.created_at)}</span></div>
+      </div>
 
-            >
-              {#if salvandoContato}
-                Salvando...
-              {:else}
-                Já entrei em contato
-              {/if}
-            </button>
-
-            <button class="btn-ghost" on:click={() => (ativo = 'oticas')}>
-              Voltar
-            </button>
-          </div>
+      {#if oticaSelecionada.observacao}
+        <div class="obs-box">
+          <b>Observações da Ótica</b>
+          <p>{oticaSelecionada.observacao}</p>
         </div>
+      {/if}
 
-        <!-- INFORMAÇÕES -->
-        <section class="panel">
-          <h3 class="p-title">Informações</h3>
+      {#if oticaSelecionada.link_google_maps}
+        <a class="map" href={oticaSelecionada.link_google_maps} target="_blank">
+          📍 Abrir no Google Maps
+        </a>
+      {/if}
 
-          <div class="grid">
-            <div>
-              <b>Responsável</b>
-              <div class="muted">{detalhes.responsavel ?? '—'}</div>
-            </div>
+      <section class="panel">
+        {#if oticaSelecionada.pode_marcar_contato}
+          <button class="btn-primary" onclick={marcarContato} disabled={salvandoContato}>
+            {salvandoContato ? "Salvando..." : "Confirmar contato"}
+          </button>
+        {:else}
+          <span class="pill ok">Contato já registrado</span>
+        {/if}
+      </section>
 
-            <div>
-              <b>Telefone</b>
-              <div class="muted">{detalhes.telefone ?? '—'}</div>
-            </div>
+      <section class="panel">
+        <h3>Histórico de Contatos</h3>
 
-            <div>
-              <b>Temperatura</b>
-              <div class="muted">{detalhes.temperatura ?? '—'}</div>
-            </div>
-
-            <div>
-              <b>Origem</b>
-              <div class="muted">{detalhes.origem ?? '—'}</div>
-            </div>
-
-            <div>
-              <b>Localização</b>
-              {#if detalhes.link_google_maps}
-                <a
-                  class="maps"
-                  href={detalhes.link_google_maps}
-                  target="_blank"
-                >
-                  Abrir no mapa →
-                </a>
-              {:else}
-                <div class="muted">Não informado</div>
+        {#if contatos.length === 0}
+          <p class="muted">Nenhum contato registrado ainda.</p>
+        {:else}
+          {#each contatos as c (c.id)}
+            <div class="contact">
+              <b>{c.status}</b>
+              <span>{formatData(c.created_at)}</span>
+              <small>{c.meio} • {c.canal}</small>
+              {#if c.observacao}
+                <p>{c.observacao}</p>
               {/if}
             </div>
+          {/each}
+        {/if}
+      </section>
 
-            {#if detalhes.liberada && detalhes.observacao}
-              <div>
-                <b>Observação do SDR</b>
-                <div class="obs-box">{detalhes.observacao}</div>
-              </div>
-            {/if}
-          </div>
-        </section>
-
-        <!-- HISTÓRICO DE CONTATOS -->
-        <section class="panel">
-          <h3 class="p-title">Histórico de Contatos</h3>
-
-          {#if contatos.length === 0}
-            <div class="muted">Nenhum contato registrado.</div>
-          {:else}
-            <div class="list-contacts">
-              {#each contatos as c (c.id)}
-                <div class="contact">
-                  <div class="c-left">
-                    <div class="c-meio">{c.meio}</div>
-                    <div class="muted">
-                      {formatDateShort(c.created_at)}
-                    </div>
-                  </div>
-
-                  <div class="c-note">{c.nota}</div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
-      </article>
-    {:else}
-      <div class="state">Selecione uma ótica para ver os detalhes.</div>
-    {/if}
+      <button class="btn-ghost" onclick={voltar}>← Voltar para lista</button>
+    </article>
   {/if}
-</main>
-
-  <!-- (restante do HTML e CSS permanece exatamente como no seu arquivo atual) -->
 </div>
 
 <style>
-
   :global(:root) {
     --bg: #f7f9fb;
-    --card: #ffffff;
+    --card: #fff;
     --muted: #64748b;
     --accent: #0ea5a3;
-    --radius: 12px;
-    --shadow: 0 6px 20px rgba(2,6,23,0.06);
+    --shadow: 0 6px 20px rgba(2,6,23,.06);
   }
 
-  .wrp {
-    min-height: 100vh;
-    padding: 26px;
-    background: var(--bg);
-    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-  }
+  .wrp { min-height:100vh; padding:24px; background:var(--bg); }
+  .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
 
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    margin-bottom: 16px;
-  }
-
-  .brand { display:flex; gap:12px; align-items:center; }
-  .logo { width:56px; border-radius:10px; }
-  .title { font-size:20px; font-weight:700; margin:0; }
-  .subtitle { margin:0; color:var(--muted); font-size:13px; }
-
-  .header-actions { display:flex; gap:10px; align-items:center; }
-
-  .btn-ghost, .btn-primary {
-    padding:8px 12px;
-    border-radius:10px;
-    border:1px solid transparent;
-    cursor:pointer;
-    background:var(--card);
-    box-shadow: var(--shadow);
-    transition: .12s;
-  }
-
-  .btn-ghost:hover { transform:translateY(-2px); }
-  .btn-primary { background: linear-gradient(180deg,#0fb7b1,#0ea5a3); color:white; border:none; }
-  .btn-primary:hover { transform:translateY(-2px); }
-
-  .nav { display:flex; gap:10px; margin-bottom:14px; }
-  .tab { padding:10px 16px; border-radius:10px; background:var(--card); border:1px solid #e6eef3; cursor:pointer; }
-  .tab.active { color:var(--accent); border-color:var(--accent); box-shadow: var(--shadow); font-weight:700; }
-
-  .content { margin-top:6px; }
-
-  .controls { display:flex; gap:12px; align-items:center; margin-bottom:12px; justify-content:space-between; flex-wrap:wrap; }
-  .search input { padding:10px 12px; border-radius:10px; border:1px solid #e6eef3; min-width:280px; }
-  .filters { display:flex; gap:8px; align-items:center; }
-  .filters select { padding:8px 10px; border-radius:8px; border:1px solid #e6eef3; }
-
-  .list { display:grid; gap:12px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
-
+  .list { display:grid; gap:12px; }
   .card {
+    all:unset;
     background:var(--card);
-    border-radius:12px;
-    padding:14px;
+    padding:16px;
+    border-radius:14px;
+    box-shadow:var(--shadow);
     display:flex;
     justify-content:space-between;
-    align-items:center;
-    border:1px solid #e6eef3;
-    box-shadow:var(--shadow);
     cursor:pointer;
-    transition:.12s;
   }
-  .card:hover { transform:translateY(-3px); }
 
-  .left {}
-  .c-title { font-weight:700; font-size:16px; }
-  .c-sub { color:var(--muted); margin-top:4px; font-size:13px; }
+  .title { font-weight:700; }
+  .sub { font-size:13px; color:var(--muted); }
 
-  .right { display:flex; align-items:center; gap:10px; }
-  .chip { padding:6px 10px; border-radius:999px; font-weight:700; font-size:12px; }
-  .temp { background:#defcf9; color:#0e918c; }
-  .chip.new { background:#fff1f2; color:#b4005a; }
+  .pill { padding:6px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+  .pill.ok { background:#e6fffa; color:#0e918c; }
+  .pill.warn { background:#fff7e6; color:#b36b00; }
 
-  .badge { padding:6px 8px; border-radius:999px; font-weight:700; font-size:12px; }
-  .badge.ok { background:#e6fffa; color:#0e918c; }
-  .badge.warn { background:#fff7e6; color:#b36b00; }
-  .badge.cold { background:#eef2ff; color:#334155; }
-  .badge.none { background:#f1f5f9; color:var(--muted); }
+  .details { background:var(--card); padding:18px; border-radius:14px; box-shadow:var(--shadow); }
+  .grid { display:grid; gap:10px; margin:12px 0; }
+  .grid div { display:flex; flex-direction:column; font-size:14px; }
 
-  .caret { font-size:20px; color:var(--muted); }
+  .obs-box { margin-top:12px; background:#f0fdfa; padding:12px; border-radius:10px; }
+  .panel { margin-top:18px; }
 
-  .temp-sections { display:flex; flex-direction:column; gap:16px; }
-  .temp-block { }
-  .temp-heading { margin:0 0 8px 0; font-weight:700; color:#0f172a; }
+  .contact {
+    background:#fff;
+    border:1px solid #e6eef3;
+    padding:10px;
+    border-radius:10px;
+    margin-bottom:8px;
+    font-size:13px;
+  }
 
-  .details { max-width:920px; margin:0 auto; background:var(--card); border-radius:14px; padding:18px; border:1px solid #e6eef3; box-shadow:var(--shadow); }
-  .d-header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-  .d-title { font-size:20px; margin:0; font-weight:800; }
-  .d-sub { color:var(--muted); margin-top:6px; }
+  .btn-primary { background:var(--accent); color:#fff; padding:10px 14px; border:none; border-radius:10px; }
+  .btn-ghost { background:#fff; padding:10px 14px; border-radius:10px; border:none; }
 
-  .d-actions { display:flex; gap:8px; align-items:center; }
-
-  .panel { margin-top:14px; padding:12px; border-radius:10px; background:#fff; border:1px solid #e6eef3; }
-  .p-title { margin:0 0 8px 0; font-weight:700; }
-
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
-
-  .timeline { margin-top:10px; display:grid; gap:10px; }
-  .t-item { display:flex; gap:10px; padding-left:10px; border-left:3px solid var(--accent); }
-
-  .list-contacts { margin-top:8px; }
-  .contact { display:flex; justify-content:space-between; padding:10px; border-radius:8px; border:1px solid #e6eef3; background:#fff; margin-bottom:8px; }
-  .c-meio { font-weight:700; }
-  .c-note { max-width:60%; }
-
-  .state { text-align:center; color:var(--muted); margin-top:12px; }
-  .state.small { font-size:13px; }
-  /* === Observação SDR (adição segura) === */
-.obs-preview {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 260px;
-}
-
-.obs-box {
-  margin-top: 6px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
-  color: #065f46;
-  font-size: 14px;
-  line-height: 1.4;
-}
-
+  .muted { color:var(--muted); font-size:13px; }
 </style>
