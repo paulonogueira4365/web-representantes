@@ -69,36 +69,61 @@
   /* =====================
      LISTA
   ===================== */
-  async function carregarOticas() {
-    carregandoLista = true;
+ async function carregarOticas() {
+  carregandoLista = true;
 
-    const { data } = await supabase
+  const [{ data: oticasData }, { data: contatosRep }] = await Promise.all([
+    supabase
       .from("vw_oticas_representante_cards")
       .select("*")
-      .eq("representante_id", representanteId)
-      .order("created_at", { ascending: false });
+      .eq("representante_id", representanteId),
 
-    oticas = (data ?? []) as Otica[];
-    carregandoLista = false;
-  }
+    supabase
+      .from("contatos")
+      .select("otica_id")
+      .eq("origem", "ATIVO") // contato do representante
+  ]);
+
+  const contatoMap = new Set<string>();
+  (contatosRep ?? []).forEach(c => contatoMap.add(c.otica_id));
+
+  oticas = (oticasData ?? []).map((o: Otica) => ({
+    ...o,
+    pode_marcar_contato: !contatoMap.has(o.id)
+  }));
+
+  carregandoLista = false;
+}
 
   /* =====================
      DETALHES
   ===================== */
   async function abrirDetalhes(o: Otica) {
-    view = "detalhes";
-    oticaSelecionada = o;
-    carregandoDetalhes = true;
+  view = "detalhes";
+  oticaSelecionada = o;
+  carregandoDetalhes = true;
 
-    const { data } = await supabase
-      .from("contatos")
-      .select("id,status,meio,canal,origem,observacao,created_at")
-      .eq("otica_id", o.id)
-      .order("created_at", { ascending: false });
+  const hoje = new Date().toISOString().slice(0, 10);
 
-    contatos = (data ?? []) as Contato[];
-    carregandoDetalhes = false;
-  }
+  const { data } = await supabase
+    .from("contatos")
+    .select("id,status,meio,canal,origem,observacao,created_at")
+    .eq("otica_id", o.id)
+    .eq("origem", "ATIVO") // 👈 somente contatos do representante
+    .gte("created_at", `${hoje}T00:00:00`)
+    .lte("created_at", `${hoje}T23:59:59`);
+
+  contatos = (data ?? []) as Contato[];
+
+  // 👇 REGRA REAL
+  oticaSelecionada = {
+    ...o,
+    pode_marcar_contato: contatos.length === 0
+  };
+
+  carregandoDetalhes = false;
+}
+
 
   function voltar() {
     view = "lista";
@@ -108,53 +133,42 @@
   /* =====================
      MARCAR CONTATO
   ===================== */
-  async function marcarContato() {
-    if (!oticaSelecionada) return;
-    if (!oticaSelecionada.pode_marcar_contato) return;
+ async function marcarContato() {
+  if (!oticaSelecionada?.pode_marcar_contato) return;
 
-    salvandoContato = true;
-    const agora = new Date().toISOString();
+  salvandoContato = true;
 
-    const { error } = await supabase.from("contatos").insert({
-      otica_id: oticaSelecionada.id,
-      representante_nome: oticaSelecionada.representante_nome,
+  const { error } = await supabase.from("contatos").insert({
+  otica_id: oticaSelecionada.id,
 
-      meio: "MENSAGEM",
-      canal: "SISTEMA",
-      origem: "ATIVO",
+  meio: "MENSAGEM",          // permitido
+  canal: "SISTEMA",          // permitido
+  origem: "ATIVO",           // permitido
 
-      status: "REALIZADO",
-      conta_comissao: true,
-      observacao: "Contato informado pelo representante"
-    });
+  status: "REALIZADO",
+  conta_comissao: true,      // 🔥 OBRIGATÓRIO PELO CHECK
 
-    if (error) {
-      console.error("Erro ao salvar contato:", error);
-      salvandoContato = false;
-      return;
-    }
+  observacao: "Contato único do representante"
+});
 
+
+
+  if (!error) {
     oticaSelecionada = {
       ...oticaSelecionada,
-      contato_em: agora,
       pode_marcar_contato: false
     };
 
-    contatos = [
-      {
-        id: crypto.randomUUID(),
-        status: "REALIZADO",
-        meio: "MENSAGEM",
-        canal: "SISTEMA",
-        origem: "ATIVO",
-        observacao: "Contato informado pelo representante",
-        created_at: agora
-      },
-      ...contatos
-    ];
-
-    salvandoContato = false;
+    oticas = oticas.map(o =>
+      o.id === oticaSelecionada!.id
+        ? { ...o, pode_marcar_contato: false }
+        : o
+    );
   }
+
+  salvandoContato = false;
+}
+
 
   onMount(carregarOticas);
 </script>

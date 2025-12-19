@@ -49,14 +49,15 @@
       let comContato = 0;
 
       if (oticaIds.length > 0) {
-        /* CONTATOS REAIS (QUALQUER CONTATO JÁ REGISTRADO) */
-        const { data: contatos } = await supabase
+        /* CONTATOS FEITOS PELO REPRESENTANTE */
+        const { data: contatosRep } = await supabase
           .from("contatos")
           .select("otica_id")
-          .in("otica_id", oticaIds);
+          .in("otica_id", oticaIds)
+          .eq("origem", "ATIVO"); // 👈 regra correta
 
         const oticasComContato = new Set(
-          contatos?.map((c) => c.otica_id) ?? []
+          contatosRep?.map((c) => c.otica_id) ?? []
         );
 
         comContato = oticasComContato.size;
@@ -81,6 +82,7 @@
 
   onMount(carregar);
 </script>
+
 
 <div class="root">
   <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
