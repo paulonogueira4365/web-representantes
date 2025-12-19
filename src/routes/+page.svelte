@@ -19,7 +19,6 @@
     carregando = true;
     erro = null;
 
-    /* REPRESENTANTES */
     const { data: reps, error: repError } = await supabase
       .from("representantes")
       .select("id, nome")
@@ -34,30 +33,28 @@
     const resultado: RepresentanteUI[] = [];
 
     for (const rep of reps ?? []) {
-      /* ÓTICAS LIBERADAS DO REPRESENTANTE */
       const { data: oticas, error: oticaError } = await supabase
-        .from("oticas")
-        .select("id")
-        .eq("representante_id", rep.id)
-        .eq("liberada", true);
+  .from("vw_oticas_representante_cards")
+  .select("id")
+  .eq("representante_id", rep.id);
+
 
       if (oticaError) continue;
 
-      const oticaIds = oticas?.map((o) => o.id) ?? [];
+      const oticaIds = oticas?.map(o => o.id) ?? [];
       const totalLiberadas = oticaIds.length;
 
       let comContato = 0;
 
       if (oticaIds.length > 0) {
-        /* CONTATOS FEITOS PELO REPRESENTANTE */
         const { data: contatosRep } = await supabase
           .from("contatos")
           .select("otica_id")
           .in("otica_id", oticaIds)
-          .eq("origem", "ATIVO"); // 👈 regra correta
+          .eq("origem", "ATIVO"); // 🔒 contato do representante
 
         const oticasComContato = new Set(
-          contatosRep?.map((c) => c.otica_id) ?? []
+          contatosRep?.map(c => c.otica_id) ?? []
         );
 
         comContato = oticasComContato.size;
@@ -80,8 +77,21 @@
     goto(`/representante/${id}`);
   }
 
-  onMount(carregar);
+  onMount(() => {
+    carregar();
+
+    const handleFocus = () => {
+      carregar();
+    };
+
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  });
 </script>
+
 
 
 <div class="root">
