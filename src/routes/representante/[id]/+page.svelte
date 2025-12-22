@@ -13,24 +13,29 @@
      TIPOS
   ===================== */
   type Otica = {
-    id: string;
-    nome: string;
-    cidade: string;
-    uf: string;
-    telefone: string;
-    responsavel: string;
-    origem: string;
-    funil_etapa: string;
-    liberada: boolean;
-    status: string;
-    observacao: string | null;
-    link_google_maps: string | null;
-    representante_nome: string;
-    representante_id: string;
-    created_at: string;
-    contato_em: string | null;
-    pode_marcar_contato: boolean;
-  };
+  id: string;
+  nome: string;
+  cidade: string;
+  uf: string;
+  telefone: string;
+  responsavel: string;
+  origem: string;
+  funil_etapa: string;
+  liberada: boolean;
+  status: string;
+  observacao: string | null;
+  link_google_maps: string | null;
+  representante_nome: string;
+  representante_id: string;
+  created_at: string;
+
+  // ✅ NOVO
+  sgo_id: string | null;
+
+  contato_em: string | null;
+  pode_marcar_contato: boolean;
+};
+
 
   type Contato = {
     id: string;
@@ -207,15 +212,50 @@
     <article class="details">
       <h2>{oticaSelecionada.nome}</h2>
 
-      <div class="grid">
-        <div><b>Responsável</b><span>{oticaSelecionada.responsavel}</span></div>
-        <div><b>Telefone</b><span>{oticaSelecionada.telefone}</span></div>
-        <div><b>Cidade / UF</b><span>{oticaSelecionada.cidade} • {oticaSelecionada.uf}</span></div>
-        <div><b>Origem</b><span>{oticaSelecionada.origem}</span></div>
-        <div><b>Etapa do Funil</b><span>{oticaSelecionada.funil_etapa}</span></div>
-        <div><b>Status</b><span>{oticaSelecionada.status}</span></div>
-        <div><b>Cadastrada em</b><span>{formatData(oticaSelecionada.created_at)}</span></div>
-      </div>
+     <div class="grid">
+  <div>
+    <b>Responsável</b>
+    <span>{oticaSelecionada.responsavel}</span>
+  </div>
+
+  <div>
+    <b>Telefone</b>
+    <span>{oticaSelecionada.telefone}</span>
+  </div>
+
+  {#if oticaSelecionada.sgo_id}
+    <div>
+      <b>SGO ID</b>
+      <span class="mono">{oticaSelecionada.sgo_id}</span>
+    </div>
+  {/if}
+
+  <div>
+    <b>Cidade / UF</b>
+    <span>{oticaSelecionada.cidade} • {oticaSelecionada.uf}</span>
+  </div>
+
+  <div>
+    <b>Origem</b>
+    <span>{oticaSelecionada.origem}</span>
+  </div>
+
+  <div>
+    <b>Etapa do Funil</b>
+    <span>{oticaSelecionada.funil_etapa}</span>
+  </div>
+
+  <div>
+    <b>Status</b>
+    <span>{oticaSelecionada.status}</span>
+  </div>
+
+  <div>
+    <b>Cadastrada em</b>
+    <span>{formatData(oticaSelecionada.created_at)}</span>
+  </div>
+</div>
+
 
       {#if oticaSelecionada.observacao}
         <div class="obs-box">
@@ -265,6 +305,12 @@
 </div>
 
 <style>
+  .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  color: #0ea5a3;
+}
+
   :global(:root) {
     --bg: #f7f9fb;
     --card: #fff;
