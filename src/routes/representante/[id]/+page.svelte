@@ -132,7 +132,9 @@
     salvandoContato = false;
   }
 
- async function initOneSignal() {
+  async function initOneSignal() {
+    if (typeof window === 'undefined') return;
+    
     try {
       await OneSignal.init({
         appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
@@ -144,29 +146,28 @@
           prenotify: true,
           showCredit: false,
           text: {
-            // Chaves de Dica (Tips)
             'tip.state.unsubscribed': 'Ativar notificações',
             'tip.state.subscribed': 'Você está inscrito',
             'tip.state.blocked': 'Notificações bloqueadas',
-            
-            // Chaves de Mensagem
             'message.prenotify': 'Clique para receber alertas',
-            'message.action.subscribing': 'Inscrevendo...', // A que estava faltando
+            'message.action.subscribing': 'Inscrevendo...',
             'message.action.subscribed': 'Obrigado por se inscrever!',
             'message.action.resubscribed': 'Você está inscrito',
             'message.action.unsubscribed': 'Você não receberá mais alertas',
-            
-            // Chaves do Diálogo Principal
             'dialog.main.title': 'Gerenciar Notificações',
             'dialog.main.button.subscribe': 'INSCREVER',
             'dialog.main.button.unsubscribe': 'DESINSCREVER',
-            
-            // Chaves de Bloqueio (Blocked)
             'dialog.blocked.title': 'Desbloquear Notificações',
             'dialog.blocked.message': 'Siga as instruções para permitir alertas:'
           }
         },
       });
+
+      // VINCULA O ID DO SUPABASE AO ONESIGNAL PARA ENVIO PERSONALIZADO
+      if (representanteId) {
+        await OneSignal.login(representanteId);
+        console.log("OneSignal: Usuário logado como", representanteId);
+      }
     } catch (e) {
       console.error("Erro OneSignal:", e);
     }
@@ -262,6 +263,17 @@
         {/if}
       </section>
 
+      <section class="panel notify-config">
+        <h3>🔔 Alertas de Novas Óticas</h3>
+        <p class="muted">Ative para ser avisado assim que uma ótica for liberada para você.</p>
+        <button 
+          class="btn-outline" 
+          onclick={() => OneSignal.Notifications.requestPermission()}
+        >
+          CONFIGURAR NOTIFICAÇÕES
+        </button>
+      </section>
+
       <section class="panel">
         <h3>Histórico de Contatos</h3>
         {#if contatos.length === 0}
@@ -277,18 +289,6 @@
         {/if}
       </section>
 
-      <section class="panel" style="background: #f0f9ff; padding: 15px; border-radius: 12px; border: 1px solid #bae6fd; margin-top: 20px;">
-        <h3 style="margin-top: 0; font-size: 14px; color: #0369a1;">🔔 Alertas do Navegador</h3>
-        <p class="muted" style="margin-bottom: 10px;">Clique abaixo para autorizar alertas de novas óticas.</p>
-        <button 
-          class="btn-ghost" 
-          style="width: 100%; border-color: #0ea5e3; color: #0ea5e3;" 
-          onclick={() => OneSignal.Notifications.requestPermission()}
-        >
-          CONFIGURAR NOTIFICAÇÕES
-        </button>
-      </section>
-
       {#if aplicacaoPromocaoAtiva}
         <section class="panel promo-panel">
           <h3 class="promo-title">🎯 CONDIÇÕES NEGOCIADAS</h3>
@@ -302,15 +302,6 @@
               <div class="beneficios">
                 {#each aplicacaoPromocaoAtiva.promocoes.beneficios as b}
                   <div class="beneficio-item">🎁 {b.label}</div>
-                {/each}
-              </div>
-            {/if}
-            {#if aplicacaoPromocaoAtiva.checklist}
-              <div class="checklist">
-                {#each Object.entries(aplicacaoPromocaoAtiva.checklist) as [k, v]}
-                  <span class="pill {v ? 'ok' : 'warn'}">
-                    {k === 'sgo_registrado' ? 'CADASTRADO NO SGO' : k.replaceAll('_',' ')}
-                  </span>
                 {/each}
               </div>
             {/if}
@@ -344,20 +335,17 @@
   .grid b { font-size: 11px; text-transform: uppercase; color: #94a3b8; }
   .obs-box { background: #f0fdfa; padding: 12px; border-radius: 10px; margin: 12px 0; font-size: 13px; }
   .panel { margin-top: 20px; border-top: 1px solid #f1f5f9; padding-top: 16px; }
-  .panel h3 { font-size: 15px; margin-bottom: 12px; }
+  .panel h3 { font-size: 15px; margin-bottom: 8px; }
   .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
   .action-btn { text-align: center; padding: 12px; border-radius: 10px; color: #fff; text-decoration: none; font-weight: 800; font-size: 13px; }
   .action-btn.call { background: #10b981; }
   .action-btn.map { background: #6366f1; }
   .btn-primary { width: 100%; background: #0ea5e3; color: #fff; border: none; padding: 16px; border-radius: 12px; font-weight: 800; cursor: pointer; }
   .btn-primary:disabled { opacity: 0.5; }
+  .btn-outline { width: 100%; background: transparent; color: #0ea5e3; border: 1px solid #0ea5e3; padding: 12px; border-radius: 10px; font-weight: 700; cursor: pointer; }
   .pill-ok-full { background: #dcfce7; color: #166534; padding: 14px; border-radius: 12px; text-align: center; font-weight: 700; }
   .contact-item { background: #f8fafc; padding: 10px; border-radius: 8px; margin-bottom: 8px; font-size: 12px; }
-  .promo-box { border: 2px dashed #e2e8f0; padding: 16px; border-radius: 12px; margin-top: 10px; }
-  .beneficios { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
-  .pill { padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; margin-right: 4px; }
-  .pill.ok { background: #dcfce7; color: #166534; }
-  .pill.warn { background: #fef3c7; color: #92400e; }
+  .notify-config { background: #f0f9ff; padding: 15px; border-radius: 12px; border: 1px solid #bae6fd; }
   .mono { font-family: monospace; color: #0ea5e3; font-weight: bold; }
-  .muted { color: #94a3b8; font-size: 12px; }
+  .muted { color: #64748b; font-size: 12px; margin-bottom: 12px; }
 </style>
