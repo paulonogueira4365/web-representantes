@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { supabase } from "$lib/supabase";
+  import OneSignal from 'react-onesignal';
 
   /* =====================
       PROPS & TYPES
@@ -71,56 +72,58 @@
   ===================== */
   async function carregarOticas() {
     carregandoLista = true;
-    const [{ data: oticasData }, { data: contatosRep }] = await Promise.all([
-      supabase.from("vw_oticas_representante_cards").select("*").eq("representante_id", representanteId),
-      supabase.from("contatos").select("otica_id").eq("origem", "ATIVO")
-    ]);
+    try {
+      const [{ data: oticasData }, { data: contatosRep }] = await Promise.all([
+        supabase.from("vw_oticas_representante_cards").select("*").eq("representante_id", representanteId),
+        supabase.from("contatos").select("otica_id").eq("origem", "ATIVO")
+      ]);
 
-    const contatoMap = new Set(contatosRep?.map(c => c.otica_id) ?? []);
-    oticasOriginal = (oticasData ?? []).map((o: any) => ({
-      ...o,
-      pode_marcar_contato: !contatoMap.has(o.id)
-    }));
-    carregandoLista = false;
+      const contatoMap = new Set(contatosRep?.map(c => c.otica_id) ?? []);
+      oticasOriginal = (oticasData ?? []).map((o: any) => ({
+        ...o,
+        pode_marcar_contato: !contatoMap.has(o.id)
+      }));
+    } catch (err) {
+      console.error("Erro ao carregar dados:", err);
+    } finally {
+      carregandoLista = false;
+    }
   }
 
   async function abrirDetalhes(o: Otica) {
     view = "detalhes";
     oticaSelecionada = o;
     carregandoDetalhes = true;
-    const hoje = new Date().toISOString().slice(0, 10);
+    try {
+      const { data: contatosData } = await supabase
+        .from("contatos")
+        .select("*")
+        .eq("otica_id", o.id)
+        .eq("origem", "ATIVO")
+        .order("created_at", { ascending: false });
+      contatos = (contatosData ?? []) as Contato[];
 
-    const { data: contatosData } = await supabase
-      .from("contatos")
-      .select("*")
-      .eq("otica_id", o.id)
-      .eq("origem", "ATIVO")
-      .order("created_at", { ascending: false });
-
-    contatos = (contatosData ?? []) as Contato[];
-
-    const { data: appsPromo } = await supabase
-      .from("aplicacoes_promocao")
-      .select("*, promocoes(*)")
-      .eq("otica_id", o.id)
-      .eq("status", "APLICADA")
-      .limit(1);
-
-    aplicacaoPromocaoAtiva = appsPromo?.[0] ?? null;
-    carregandoDetalhes = false;
+      const { data: appsPromo } = await supabase
+        .from("aplicacoes_promocao")
+        .select("*, promocoes(*)")
+        .eq("otica_id", o.id)
+        .eq("status", "APLICADA")
+        .limit(1);
+      aplicacaoPromocaoAtiva = appsPromo?.[0] ?? null;
+    } finally {
+      carregandoDetalhes = false;
+    }
   }
 
   async function marcarContato() {
     if (!oticaSelecionada?.pode_marcar_contato) return;
     salvandoContato = true;
-
     const { error } = await supabase.from("contatos").insert({
       otica_id: oticaSelecionada.id,
       meio: "MENSAGEM", canal: "SISTEMA", origem: "ATIVO",
       status: "REALIZADO", conta_comissao: true,
       observacao: "Contato realizado via Painel do Representante"
     });
-
     if (!error) {
       oticaSelecionada.pode_marcar_contato = false;
       await carregarOticas();
@@ -129,7 +132,50 @@
     salvandoContato = false;
   }
 
-  onMount(carregarOticas);
+ async function initOneSignal() {
+    try {
+      await OneSignal.init({
+        appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
+        safari_web_id: "web.onesignal.auto.05605657-a1ec-46ab-8d61-441038586900",
+        allowLocalhostAsSecureOrigin: true,
+        notifyButton: {
+          enable: true,
+          position: 'bottom-right',
+          prenotify: true,
+          showCredit: false,
+          text: {
+            // Chaves de Dica (Tips)
+            'tip.state.unsubscribed': 'Ativar notificações',
+            'tip.state.subscribed': 'Você está inscrito',
+            'tip.state.blocked': 'Notificações bloqueadas',
+            
+            // Chaves de Mensagem
+            'message.prenotify': 'Clique para receber alertas',
+            'message.action.subscribing': 'Inscrevendo...', // A que estava faltando
+            'message.action.subscribed': 'Obrigado por se inscrever!',
+            'message.action.resubscribed': 'Você está inscrito',
+            'message.action.unsubscribed': 'Você não receberá mais alertas',
+            
+            // Chaves do Diálogo Principal
+            'dialog.main.title': 'Gerenciar Notificações',
+            'dialog.main.button.subscribe': 'INSCREVER',
+            'dialog.main.button.unsubscribe': 'DESINSCREVER',
+            
+            // Chaves de Bloqueio (Blocked)
+            'dialog.blocked.title': 'Desbloquear Notificações',
+            'dialog.blocked.message': 'Siga as instruções para permitir alertas:'
+          }
+        },
+      });
+    } catch (e) {
+      console.error("Erro OneSignal:", e);
+    }
+  }
+
+  onMount(() => {
+    carregarOticas();
+    initOneSignal();
+  });
 </script>
 
 <div class="wrp">
@@ -231,6 +277,18 @@
         {/if}
       </section>
 
+      <section class="panel" style="background: #f0f9ff; padding: 15px; border-radius: 12px; border: 1px solid #bae6fd; margin-top: 20px;">
+        <h3 style="margin-top: 0; font-size: 14px; color: #0369a1;">🔔 Alertas do Navegador</h3>
+        <p class="muted" style="margin-bottom: 10px;">Clique abaixo para autorizar alertas de novas óticas.</p>
+        <button 
+          class="btn-ghost" 
+          style="width: 100%; border-color: #0ea5e3; color: #0ea5e3;" 
+          onclick={() => OneSignal.Notifications.requestPermission()}
+        >
+          CONFIGURAR NOTIFICAÇÕES
+        </button>
+      </section>
+
       {#if aplicacaoPromocaoAtiva}
         <section class="panel promo-panel">
           <h3 class="promo-title">🎯 CONDIÇÕES NEGOCIADAS</h3>
@@ -266,54 +324,40 @@
 <style>
   :global(body) { background: #f7f9fb; font-family: 'Inter', sans-serif; margin: 0; }
   .wrp { padding: 16px; max-width: 500px; margin: 0 auto; }
-  
-  /* HEADER & NAV */
   .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .header h1 { font-size: 18px; font-weight: 800; }
-  .btn-ghost { background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 12px; font-weight: 700; }
-  
+  .btn-ghost { background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 12px; font-weight: 700; cursor: pointer; }
   .search-box input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 12px; box-sizing: border-box; }
-
   .tabs { display: flex; gap: 4px; background: #e2e8f0; padding: 4px; border-radius: 12px; margin-bottom: 16px; }
-  .tabs button { flex: 1; border: none; padding: 10px; border-radius: 9px; font-size: 11px; font-weight: 800; color: #64748b; background: none; }
+  .tabs button { flex: 1; border: none; padding: 10px; border-radius: 9px; font-size: 11px; font-weight: 800; color: #64748b; background: none; cursor: pointer; }
   .tabs button.active { background: #fff; color: #0ea5e3; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-
-  /* LISTA */
   .city-group { margin-bottom: 16px; }
   .city-label { font-size: 11px; text-transform: uppercase; color: #94a3b8; letter-spacing: 1px; margin-bottom: 6px; padding-left: 4px; }
-  .card { all: unset; background: #fff; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; width: 100%; box-sizing: border-box; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+  .card { all: unset; background: #fff; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; width: 100%; box-sizing: border-box; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; }
   .title { font-weight: 700; font-size: 14px; }
   .sub { font-size: 12px; color: #64748b; }
   .chevron { color: #cbd5e1; font-size: 18px; }
-
-  /* DETALHES */
   .details { background: #fff; padding: 20px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-  .btn-back { background: none; border: none; color: #0ea5e3; font-weight: 800; font-size: 13px; margin-bottom: 12px; padding: 0; }
+  .btn-back { background: none; border: none; color: #0ea5e3; font-weight: 800; font-size: 13px; margin-bottom: 12px; padding: 0; cursor: pointer; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
   .grid div { display: flex; flex-direction: column; font-size: 13px; }
   .grid b { font-size: 11px; text-transform: uppercase; color: #94a3b8; }
-  
   .obs-box { background: #f0fdfa; padding: 12px; border-radius: 10px; margin: 12px 0; font-size: 13px; }
   .panel { margin-top: 20px; border-top: 1px solid #f1f5f9; padding-top: 16px; }
   .panel h3 { font-size: 15px; margin-bottom: 12px; }
-
   .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
   .action-btn { text-align: center; padding: 12px; border-radius: 10px; color: #fff; text-decoration: none; font-weight: 800; font-size: 13px; }
   .action-btn.call { background: #10b981; }
   .action-btn.map { background: #6366f1; }
-
-  .btn-primary { width: 100%; background: #0ea5e3; color: #fff; border: none; padding: 16px; border-radius: 12px; font-weight: 800; }
+  .btn-primary { width: 100%; background: #0ea5e3; color: #fff; border: none; padding: 16px; border-radius: 12px; font-weight: 800; cursor: pointer; }
+  .btn-primary:disabled { opacity: 0.5; }
   .pill-ok-full { background: #dcfce7; color: #166534; padding: 14px; border-radius: 12px; text-align: center; font-weight: 700; }
-
-  /* HISTÓRICO & PROMO */
   .contact-item { background: #f8fafc; padding: 10px; border-radius: 8px; margin-bottom: 8px; font-size: 12px; }
   .promo-box { border: 2px dashed #e2e8f0; padding: 16px; border-radius: 12px; margin-top: 10px; }
   .beneficios { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
-  .beneficio-item { font-size: 13px; font-weight: 700; }
   .pill { padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; margin-right: 4px; }
   .pill.ok { background: #dcfce7; color: #166534; }
   .pill.warn { background: #fef3c7; color: #92400e; }
-  
   .mono { font-family: monospace; color: #0ea5e3; font-weight: bold; }
   .muted { color: #94a3b8; font-size: 12px; }
 </style>
