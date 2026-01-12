@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { supabase } from "$lib/supabase";
-  import OneSignal from 'react-onesignal';
+  import { browser } from "$app/environment";
 
   /* =====================
       PROPS & TYPES
@@ -11,59 +11,107 @@
   const representanteId = props.data.id;
 
   type Otica = {
-    id: string; nome: string; cidade: string; uf: string; telefone: string;
-    responsavel: string; origem: string; funil_etapa: string; liberada: boolean;
-    status: string; observacao: string | null; link_google_maps: string | null;
-    created_at: string; sgo_id: string | null; pode_marcar_contato: boolean;
+    id: string;
+    nome: string;
+    cidade: string;
+    uf: string;
+    telefone: string;
+    responsavel: string;
+    origem: string;
+    funil_etapa: string;
+    liberada: boolean;
+    status: string;
+    observacao: string | null;
+    link_google_maps: string | null;
+    created_at: string;
+    sgo_id: string | null;
+    pode_marcar_contato: boolean;
   };
 
   type Contato = {
-    id: string; status: string; meio: string; canal: string;
-    origem: string; observacao: string | null; created_at: string;
+    id: string;
+    status: string;
+    meio: string;
+    canal: string;
+    origem: string;
+    observacao: string | null;
+    created_at: string;
+  };
+
+  type Pedido = {
+    id: string;
+    tipo: "PAGO" | "BONIFICADO";
+    status: "ATIVO" | "CANCELADO";
+    valor: number | null;
+    created_at: string;
+    id_venda_sgo: string | null;
   };
 
   /* =====================
-      STATE
+      STATE (RUNES)
   ===================== */
   let view = $state<"lista" | "detalhes">("lista");
   let activeTab = $state<"pendentes" | "concluidas">("pendentes");
   let searchQuery = $state("");
-  
+
   let oticasOriginal = $state<Otica[]>([]);
   let oticaSelecionada = $state<Otica | null>(null);
   let contatos = $state<Contato[]>([]);
 
+  let pedidos = $state<Pedido[]>([]);
+  let receitaTotal = $state(0);
+
   let carregandoLista = $state(true);
   let carregandoDetalhes = $state(false);
+  let carregandoPedidos = $state(false);
   let salvandoContato = $state(false);
+
   let aplicacaoPromocaoAtiva = $state<any | null>(null);
+
+  /* =====================
+      NOTIFICAÇÃO
+  ===================== */
+  let oneSignalInstance = $state<any>(null);
+  let exibirBannerNotificacao = $state(false);
+  let isOneSignalInitialized = false;
 
   /* =====================
       HELPERS
   ===================== */
-  const formatData = (d?: string | null) => d ? new Date(d).toLocaleString("pt-BR") : "—";
-  const formatDataBR = (d?: string | null) => d ? new Date(d).toLocaleDateString("pt-BR") : "—";
+  const formatData = (d?: string | null) =>
+    d ? new Date(d).toLocaleString("pt-BR") : "—";
+
+  const formatDataBR = (d?: string | null) =>
+    d ? new Date(d).toLocaleDateString("pt-BR") : "—";
 
   /* =====================
-      LÓGICA DE FILTRO & AGRUPAMENTO
+      FILTRO
   ===================== */
   let gruposExibidos = $derived.by(() => {
-    let filtradas = oticasOriginal.filter(o => {
-      const statusMatch = activeTab === "pendentes" ? o.pode_marcar_contato : !o.pode_marcar_contato;
-      const searchMatch = o.nome.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          o.cidade.toLowerCase().includes(searchQuery.toLowerCase());
+    const filtradas = oticasOriginal.filter(o => {
+      const statusMatch =
+        activeTab === "pendentes"
+          ? o.pode_marcar_contato
+          : !o.pode_marcar_contato;
+
+      const searchMatch =
+        o.nome.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        o.cidade.toLowerCase().includes(searchQuery.toLowerCase());
+
       return statusMatch && searchMatch;
     });
 
     const grupos: Record<string, Otica[]> = {};
     filtradas.forEach(o => {
-      if (!grupos[o.cidade]) grupos[o.cidade] = [];
+      grupos[o.cidade] ??= [];
       grupos[o.cidade].push(o);
     });
 
     return Object.keys(grupos).sort().map(cidade => ({
       nome: cidade,
-      itens: grupos[cidade].sort((a, b) => a.nome.localeCompare(b.nome))
+      itens: grupos[cidade].sort((a, b) =>
+        a.nome.localeCompare(b.nome)
+      )
     }));
   });
 
@@ -73,113 +121,148 @@
   async function carregarOticas() {
     carregandoLista = true;
     try {
-      const [{ data: oticasData }, { data: contatosRep }] = await Promise.all([
-        supabase.from("vw_oticas_representante_cards").select("*").eq("representante_id", representanteId),
-        supabase.from("contatos").select("otica_id").eq("origem", "ATIVO")
+      const [{ data: oticas }, { data: contatosRep }] = await Promise.all([
+        supabase
+          .from("vw_oticas_representante_cards")
+          .select("*")
+          .eq("representante_id", representanteId),
+        supabase
+          .from("contatos")
+          .select("otica_id")
+          .eq("origem", "ATIVO")
       ]);
 
       const contatoMap = new Set(contatosRep?.map(c => c.otica_id) ?? []);
-      oticasOriginal = (oticasData ?? []).map((o: any) => ({
+
+      oticasOriginal = (oticas ?? []).map((o: any) => ({
         ...o,
         pode_marcar_contato: !contatoMap.has(o.id)
       }));
-    } catch (err) {
-      console.error("Erro ao carregar dados:", err);
     } finally {
       carregandoLista = false;
     }
+  }
+
+  async function initOneSignal() {
+    if (!browser || isOneSignalInitialized) return;
+    isOneSignalInitialized = true;
+
+    const mod = await import("react-onesignal");
+    oneSignalInstance = mod.default;
+
+    await oneSignalInstance.init({
+      appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
+      allowLocalhostAsSecureOrigin: true,
+      notifyButton: { enable: false }
+    });
+
+    await oneSignalInstance.login(representanteId);
+
+    const { data: rep } = await supabase
+      .from("representantes")
+      .select("push_active")
+      .eq("id", representanteId)
+      .single();
+
+    if (!rep?.push_active) exibirBannerNotificacao = true;
+  }
+
+  async function ativarNotificacoes() {
+    await oneSignalInstance.Notifications.requestPermission();
+    await oneSignalInstance.login(representanteId);
+
+    await supabase
+      .from("representantes")
+      .update({ push_active: true })
+      .eq("id", representanteId);
+
+    exibirBannerNotificacao = false;
   }
 
   async function abrirDetalhes(o: Otica) {
     view = "detalhes";
     oticaSelecionada = o;
     carregandoDetalhes = true;
-    try {
-      const { data: contatosData } = await supabase
-        .from("contatos")
-        .select("*")
-        .eq("otica_id", o.id)
-        .eq("origem", "ATIVO")
-        .order("created_at", { ascending: false });
-      contatos = (contatosData ?? []) as Contato[];
 
-      const { data: appsPromo } = await supabase
-        .from("aplicacoes_promocao")
-        .select("*, promocoes(*)")
-        .eq("otica_id", o.id)
-        .eq("status", "APLICADA")
-        .limit(1);
-      aplicacaoPromocaoAtiva = appsPromo?.[0] ?? null;
-    } finally {
-      carregandoDetalhes = false;
-    }
+    const { data: contatosData } = await supabase
+      .from("contatos")
+      .select("*")
+      .eq("otica_id", o.id)
+      .eq("origem", "ATIVO")
+      .order("created_at", { ascending: false });
+
+    contatos = contatosData ?? [];
+
+    carregandoPedidos = true;
+
+    const { data: pedidosData } = await supabase
+      .from("pedidos")
+      .select("id, tipo, status, valor, created_at, id_venda_sgo")
+      .eq("otica_id", o.id)
+      .eq("status", "ATIVO")
+      .order("created_at", { ascending: false });
+
+    pedidos = pedidosData ?? [];
+
+    receitaTotal = pedidos.reduce(
+      (t, p) => (p.tipo === "PAGO" && p.valor ? t + p.valor : t),
+      0
+    );
+
+    carregandoPedidos = false;
+
+    const { data: promo } = await supabase
+      .from("aplicacoes_promocao")
+      .select("*, promocoes(*)")
+      .eq("otica_id", o.id)
+      .eq("status", "APLICADA")
+      .limit(1);
+
+    aplicacaoPromocaoAtiva = promo?.[0] ?? null;
+    carregandoDetalhes = false;
   }
 
   async function marcarContato() {
     if (!oticaSelecionada?.pode_marcar_contato) return;
+
     salvandoContato = true;
-    const { error } = await supabase.from("contatos").insert({
+    await supabase.from("contatos").insert({
       otica_id: oticaSelecionada.id,
-      meio: "MENSAGEM", canal: "SISTEMA", origem: "ATIVO",
-      status: "REALIZADO", conta_comissao: true,
-      observacao: "Contato realizado via Painel do Representante"
+      meio: "MENSAGEM",
+      canal: "SISTEMA",
+      origem: "ATIVO",
+      status: "REALIZADO",
+      conta_comissao: true
     });
-    if (!error) {
-      oticaSelecionada.pode_marcar_contato = false;
-      await carregarOticas();
-      view = "lista";
-    }
+
+    await carregarOticas();
+    view = "lista";
     salvandoContato = false;
   }
 
-  async function initOneSignal() {
-    if (typeof window === 'undefined') return;
-    
-    try {
-      await OneSignal.init({
-        appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
-        safari_web_id: "web.onesignal.auto.05605657-a1ec-46ab-8d61-441038586900",
-        allowLocalhostAsSecureOrigin: true,
-        notifyButton: {
-          enable: true,
-          position: 'bottom-right',
-          prenotify: true,
-          showCredit: false,
-          text: {
-            'tip.state.unsubscribed': 'Ativar notificações',
-            'tip.state.subscribed': 'Você está inscrito',
-            'tip.state.blocked': 'Notificações bloqueadas',
-            'message.prenotify': 'Clique para receber alertas',
-            'message.action.subscribing': 'Inscrevendo...',
-            'message.action.subscribed': 'Obrigado por se inscrever!',
-            'message.action.resubscribed': 'Você está inscrito',
-            'message.action.unsubscribed': 'Você não receberá mais alertas',
-            'dialog.main.title': 'Gerenciar Notificações',
-            'dialog.main.button.subscribe': 'INSCREVER',
-            'dialog.main.button.unsubscribe': 'DESINSCREVER',
-            'dialog.blocked.title': 'Desbloquear Notificações',
-            'dialog.blocked.message': 'Siga as instruções para permitir alertas:'
-          }
-        },
-      });
-
-      // VINCULA O ID DO SUPABASE AO ONESIGNAL PARA ENVIO PERSONALIZADO
-      if (representanteId) {
-        await OneSignal.login(representanteId);
-        console.log("OneSignal: Usuário logado como", representanteId);
-      }
-    } catch (e) {
-      console.error("Erro OneSignal:", e);
-    }
-  }
-
-  onMount(() => {
+  onMount(async () => {
     carregarOticas();
-    initOneSignal();
+    await initOneSignal();
   });
 </script>
 
+<!-- TEMPLATE (HTML + CSS permanece o mesmo que você já tem) -->
+
+
 <div class="wrp">
+  {#if exibirBannerNotificacao}
+    <div class="banner-alerta">
+      <div class="banner-content">
+        <span class="icon">🔔</span>
+        <div>
+          <strong>Ative as notificações</strong>
+          <p>Seja avisado assim que uma nova ótica for liberada.</p>
+        </div>
+      </div>
+      <button onclick={ativarNotificacoes}>ATIVAR AGORA</button>
+    </div>
+  {/if}
+
   {#if view === "lista"}
     <header class="header">
       <h1>Painel do Representante</h1>
@@ -237,84 +320,137 @@
         <div><b>Cidade / UF</b><span>{oticaSelecionada.cidade} • {oticaSelecionada.uf}</span></div>
         <div><b>Etapa do Funil</b><span>{oticaSelecionada.funil_etapa}</span></div>
         <div><b>Status</b><span>{oticaSelecionada.status}</span></div>
-      </div>
+        </div> <!-- FECHA .grid -->
 
-      {#if oticaSelecionada.observacao}
-        <div class="obs-box">
-          <b>Observações da Ótica</b>
-          <p>{oticaSelecionada.observacao}</p>
-        </div>
-      {/if}
 
-      <div class="quick-actions">
-        <a class="action-btn call" href="tel:{oticaSelecionada.telefone}">📞 Ligar</a>
-        {#if oticaSelecionada.link_google_maps}
-          <a class="action-btn map" href={oticaSelecionada.link_google_maps} target="_blank">📍 Maps</a>
-        {/if}
-      </div>
+        
+ <!-- RECEITA DA ÓTICA -->
+<section class="panel receita-panel">
+  <h3>Receita da Ótica</h3>
+  <div class="receita-box">
+    <span>Total faturado</span>
+    <strong>R$ {receitaTotal.toFixed(2)}</strong>
+  </div>
+</section>
 
-      <section class="panel">
-        {#if oticaSelecionada.pode_marcar_contato}
-          <button class="btn-primary" onclick={marcarContato} disabled={salvandoContato}>
-            {salvandoContato ? "Salvando..." : "CONFIRMAR CONTATO"}
-          </button>
-        {:else}
-          <div class="pill-ok-full">✓ Contato já registrado</div>
-        {/if}
-      </section>
+<!-- PEDIDOS DA ÓTICA -->
+<section class="panel">
+  <h3>Pedidos da Ótica</h3>
 
-      <section class="panel notify-config">
-        <h3>🔔 Alertas de Novas Óticas</h3>
-        <p class="muted">Ative para ser avisado assim que uma ótica for liberada para você.</p>
-        <button 
-          class="btn-outline" 
-          onclick={() => OneSignal.Notifications.requestPermission()}
-        >
-          CONFIGURAR NOTIFICAÇÕES
-        </button>
-      </section>
+  {#if carregandoPedidos}
+    <p class="muted">Carregando pedidos...</p>
 
-      <section class="panel">
-        <h3>Histórico de Contatos</h3>
-        {#if contatos.length === 0}
-          <p class="muted">Nenhum contato registrado.</p>
-        {:else}
-          {#each contatos as c (c.id)}
-            <div class="contact-item">
-              <b>{c.status}</b>
-              <span>{formatData(c.created_at)}</span>
-              <small>{c.meio} • {c.canal}</small>
-            </div>
-          {/each}
-        {/if}
-      </section>
+  {:else if pedidos.length === 0}
+    <p class="muted">Nenhum pedido encontrado.</p>
 
-      {#if aplicacaoPromocaoAtiva}
-        <section class="panel promo-panel">
-          <h3 class="promo-title">🎯 CONDIÇÕES NEGOCIADAS</h3>
-          <div class="promo-box">
-            <strong>{aplicacaoPromocaoAtiva.promocoes.nome}</strong>
-            <div class="promo-validade">
-              <small class="label">Validade</small>
-              <strong>{formatDataBR(aplicacaoPromocaoAtiva.validade_inicio)} → {formatDataBR(aplicacaoPromocaoAtiva.validade_fim)}</strong>
-            </div>
-            {#if aplicacaoPromocaoAtiva.promocoes.beneficios?.length}
-              <div class="beneficios">
-                {#each aplicacaoPromocaoAtiva.promocoes.beneficios as b}
-                  <div class="beneficio-item">🎁 {b.label}</div>
-                {/each}
-              </div>
+  {:else}
+    {#each pedidos as p (p.id)}
+      <div class="pedido-item">
+        <div class="pedido-top">
+          <strong>
+            {#if p.id_venda_sgo}
+              SGO #{p.id_venda_sgo}
+            {:else}
+              Pedido interno
             {/if}
-          </div>
-        </section>
-      {/if}
+          </strong>
+          <span class="status">{p.tipo}</span>
+        </div>
+
+        <div class="pedido-info">
+          <span>{formatDataBR(p.created_at)}</span>
+          <b>{p.valor ? `R$ ${p.valor.toFixed(2)}` : "—"}</b>
+        </div>
+      </div>
+    {/each}
+  {/if}
+</section>
+
+
+
+
+{#if oticaSelecionada.observacao}
+  <div class="obs-box">
+    <b>Observações da Ótica</b>
+    <p>{oticaSelecionada.observacao}</p>
+  </div>
+{/if}
+
+<div class="quick-actions">
+  <a class="action-btn call" href="tel:{oticaSelecionada.telefone}">📞 Ligar</a>
+  {#if oticaSelecionada.link_google_maps}
+    <a class="action-btn map" href={oticaSelecionada.link_google_maps} target="_blank">📍 Maps</a>
+  {/if}
+</div>
+
+<section class="panel">
+  {#if oticaSelecionada.pode_marcar_contato}
+    <button class="btn-primary" onclick={marcarContato} disabled={salvandoContato}>
+      {salvandoContato ? "Salvando..." : "CONFIRMAR CONTATO"}
+    </button>
+  {:else}
+    <div class="pill-ok-full">✓ Contato já registrado</div>
+  {/if}
+</section>
+
+<section class="panel">
+  <h3>Histórico de Contatos</h3>
+  {#if contatos.length === 0}
+    <p class="muted">Nenhum contato registrado.</p>
+  {:else}
+    {#each contatos as c (c.id)}
+      <div class="contact-item">
+        <b>{c.status}</b>
+        <span>{formatData(c.created_at)}</span>
+        <small>{c.meio} • {c.canal}</small>
+      </div>
+    {/each}
+  {/if}
+</section>
+
+{#if aplicacaoPromocaoAtiva}
+  <section class="panel promo-panel">
+    <h3 class="promo-title">🎯 CONDIÇÕES NEGOCIADAS</h3>
+    <div class="promo-box">
+      <strong>{aplicacaoPromocaoAtiva.promocoes.nome}</strong>
+      <div class="promo-validade">
+        <small class="label">Validade</small>
+        <strong>
+          {formatDataBR(aplicacaoPromocaoAtiva.validade_inicio)}
+          →
+          {formatDataBR(aplicacaoPromocaoAtiva.validade_fim)}
+        </strong>
+      </div>
+    </div>
+  </section>
+{/if}
     </article>
   {/if}
 </div>
 
+
 <style>
   :global(body) { background: #f7f9fb; font-family: 'Inter', sans-serif; margin: 0; }
   .wrp { padding: 16px; max-width: 500px; margin: 0 auto; }
+  
+  /* ESTILO BANNER DESTAQUE */
+  .banner-alerta {
+    background: linear-gradient(135deg, #0ea5e3 0%, #0284c7 100%);
+    color: white;
+    padding: 16px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 10px 15px -3px rgba(14, 165, 227, 0.3);
+  }
+  .banner-content { display: flex; align-items: center; gap: 12px; }
+  .banner-content .icon { font-size: 24px; background: rgba(255, 255, 255, 0.2); padding: 8px; border-radius: 12px; }
+  .banner-content strong { display: block; font-size: 14px; }
+  .banner-content p { margin: 0; font-size: 12px; opacity: 0.9; }
+  .banner-alerta button { background: white; color: #0ea5e3; border: none; padding: 10px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; }
+
   .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .header h1 { font-size: 18px; font-weight: 800; }
   .btn-ghost { background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 12px; font-weight: 700; cursor: pointer; }
@@ -342,10 +478,39 @@
   .action-btn.map { background: #6366f1; }
   .btn-primary { width: 100%; background: #0ea5e3; color: #fff; border: none; padding: 16px; border-radius: 12px; font-weight: 800; cursor: pointer; }
   .btn-primary:disabled { opacity: 0.5; }
-  .btn-outline { width: 100%; background: transparent; color: #0ea5e3; border: 1px solid #0ea5e3; padding: 12px; border-radius: 10px; font-weight: 700; cursor: pointer; }
   .pill-ok-full { background: #dcfce7; color: #166534; padding: 14px; border-radius: 12px; text-align: center; font-weight: 700; }
   .contact-item { background: #f8fafc; padding: 10px; border-radius: 8px; margin-bottom: 8px; font-size: 12px; }
-  .notify-config { background: #f0f9ff; padding: 15px; border-radius: 12px; border: 1px solid #bae6fd; }
   .mono { font-family: monospace; color: #0ea5e3; font-weight: bold; }
   .muted { color: #64748b; font-size: 12px; margin-bottom: 12px; }
+
+  .pedido-item {
+  background: #f8fafc;
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.pedido-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.pedido-top .status {
+  font-size: 11px;
+  font-weight: 800;
+  color: #0ea5e3;
+  background: #e0f2fe;
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
+.pedido-info {
+  display: flex;
+  justify-content: space-between;
+  color: #64748b;
+}
+
 </style>

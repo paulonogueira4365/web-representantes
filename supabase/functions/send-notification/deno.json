@@ -1,0 +1,40 @@
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+
+serve(async (req) => {
+  const { tipo, representante_id, nome } = await req.json();
+
+  if (tipo !== "otica_liberada") {
+    return new Response("Tipo ignorado", { status: 200 });
+  }
+
+  const apiKey = Deno.env.get("ONESIGNAL_REST_API_KEY");
+  if (!apiKey) {
+    return new Response("API Key ausente", { status: 500 });
+  }
+
+  const payload = {
+    app_id: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
+    include_external_user_ids: [representante_id],
+    contents: {
+      en: `Ótica ${nome} liberada!`,
+      any: `Ótica ${nome} liberada!`,
+    },
+    headings: {
+      en: "Sistema",
+      any: "Sistema",
+    },
+  };
+
+  const res = await fetch("https://onesignal.com/api/v1/notifications", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Basic ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text();
+
+  return new Response(text, { status: res.status });
+});

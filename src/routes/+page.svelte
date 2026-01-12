@@ -2,6 +2,7 @@
   import { supabase } from "$lib/supabase";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
+  import { browser } from "$app/environment";
 
   type RepresentanteUI = {
     id: string;
@@ -11,66 +12,65 @@
     oticasSemContato: number;
   };
 
-  let representantes: RepresentanteUI[] = [];
-  let carregando = true;
-  let erro: string | null = null;
+  // --- ESTADO REATIVO (Svelte 5) ---
+  // Inicializamos com valores padrão explícitos
+  let representantes = $state<RepresentanteUI[]>([]);
+  let carregando = $state(true);
+  let erro = $state<string | null>(null);
 
   async function carregar() {
-    carregando = true;
+    // 💡 IMPORTANTE: Sempre use a atribuição direta para disparar a reatividade
+    carregando = true; 
     erro = null;
 
-    const { data: reps, error: repError } = await supabase
-      .from("representantes")
-      .select("id, nome")
-      .order("nome");
+    try {
+      const { data: reps, error: repError } = await supabase
+        .from("representantes")
+        .select("id, nome")
+        .order("nome");
 
-    if (repError) {
-      erro = repError.message;
-      carregando = false;
-      return;
-    }
+      if (repError) throw repError;
 
-    const resultado: RepresentanteUI[] = [];
+      const resultado: RepresentanteUI[] = [];
+      
+      for (const rep of reps ?? []) {
+        const { data: oticas } = await supabase
+          .from("vw_oticas_representante_cards")
+          .select("id")
+          .eq("representante_id", rep.id);
 
-    for (const rep of reps ?? []) {
-      const { data: oticas, error: oticaError } = await supabase
-  .from("vw_oticas_representante_cards")
-  .select("id")
-  .eq("representante_id", rep.id);
+        const oticaIds = oticas?.map(o => o.id) ?? [];
+        const totalLiberadas = oticaIds.length;
+        let comContato = 0;
 
+        if (totalLiberadas > 0) {
+          const { data: contatosRep } = await supabase
+            .from("contatos")
+            .select("otica_id")
+            .in("otica_id", oticaIds)
+            .eq("origem", "ATIVO");
 
-      if (oticaError) continue;
+          const oticasComContato = new Set(contatosRep?.map(c => c.otica_id) ?? []);
+          comContato = oticasComContato.size;
+        }
 
-      const oticaIds = oticas?.map(o => o.id) ?? [];
-      const totalLiberadas = oticaIds.length;
-
-      let comContato = 0;
-
-      if (oticaIds.length > 0) {
-        const { data: contatosRep } = await supabase
-          .from("contatos")
-          .select("otica_id")
-          .in("otica_id", oticaIds)
-          .eq("origem", "ATIVO"); // 🔒 contato do representante
-
-        const oticasComContato = new Set(
-          contatosRep?.map(c => c.otica_id) ?? []
-        );
-
-        comContato = oticasComContato.size;
+        resultado.push({
+          id: rep.id,
+          nome: rep.nome,
+          oticasLiberadas: totalLiberadas,
+          oticasComContato: comContato,
+          oticasSemContato: totalLiberadas - comContato
+        });
       }
-
-      resultado.push({
-        id: rep.id,
-        nome: rep.nome,
-        oticasLiberadas: totalLiberadas,
-        oticasComContato: comContato,
-        oticasSemContato: totalLiberadas - comContato
-      });
+      
+      // Atualiza o estado de uma vez só
+      representantes = resultado;
+    } catch (e: any) {
+      console.error("Erro na busca:", e);
+      erro = e.message;
+    } finally {
+      carregando = false;
     }
-
-    representantes = resultado;
-    carregando = false;
   }
 
   function abrir(id: string) {
@@ -78,21 +78,33 @@
   }
 
   onMount(() => {
-    carregar();
+    carregar();
 
-    const handleFocus = () => {
-      carregar();
-    };
+    if (browser) {
+      // Corrigido: Inicializa antes de deslogar
+      import('react-onesignal').then(async (mod) => {
+        const OneSignal = mod.default;
+        
+        try {
+          // Precisamos do init para o logout funcionar sem erro 'tt'
+          await OneSignal.init({
+            appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
+            allowLocalhostAsSecureOrigin: true
+          });
+          
+          await OneSignal.logout();
+          console.log("Sessão OneSignal limpa.");
+        } catch (e) {
+          // Silencia erros caso o OneSignal já esteja inicializado ou falhe
+        }
+      });
 
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-    };
-  });
+      const handleFocus = () => carregar();
+      window.addEventListener("focus", handleFocus);
+      return () => window.removeEventListener("focus", handleFocus);
+    }
+  });
 </script>
-
-
 
 <div class="root">
   <img src="/uplab-logo.jpg" class="logo" alt="UPLAB" />
@@ -107,12 +119,12 @@
   {:else}
     <div class="list">
       {#each representantes as r (r.id)}
-        <button class="card" on:click={() => abrir(r.id)}>
+        <button class="card" onclick={() => abrir(r.id)}>
           <div class="info">
             <div class="nome">{r.nome}</div>
             <div class="stats">
-              <span class="ok">✔ {r.oticasLiberadas} óticas liberadas</span>
-              <span class="info-blue">✅ {r.oticasComContato} com contato</span>
+              <span class="ok">✔ {r.oticasLiberadas} óticas</span>
+              <span class="info-blue">✅ {r.oticasComContato} contatos</span>
               <span class="warn">⚠ {r.oticasSemContato} pendentes</span>
             </div>
           </div>
@@ -124,6 +136,12 @@
 </div>
 
 <style>
+  :global(:root) {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --muted: #64748b;
+    --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  }
   .root {
     min-height: 100vh;
     padding: 24px 16px;
@@ -131,81 +149,24 @@
     flex-direction: column;
     align-items: center;
     background: var(--bg);
+    font-family: sans-serif;
   }
-
-  .logo {
-    width: 72px;
-    margin: 24px 0 16px;
-    border-radius: 16px;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 800;
-  }
-
-  .subtitle {
-    margin: 6px 0 20px;
-    color: var(--muted);
-  }
-
-  .list {
-    width: 100%;
-    max-width: 420px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
+  .logo { width: 72px; margin-bottom: 16px; border-radius: 12px; }
+  .title { font-size: 22px; font-weight: 800; margin: 0; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .list { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 12px; }
   .card {
-    all: unset;
-    background: var(--card);
-    padding: 18px 20px;
-    border-radius: 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: var(--shadow);
-    cursor: pointer;
+    all: unset; background: var(--card); padding: 16px; border-radius: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: var(--shadow); cursor: pointer; transition: transform 0.2s;
   }
-
-  .card:active {
-    transform: scale(0.97);
-  }
-
-  .info {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .nome {
-    font-weight: 700;
-  }
-
-  .stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    font-size: 13px;
-  }
-
+  .card:active { transform: scale(0.98); }
+  .nome { font-weight: 700; display: block; margin-bottom: 4px; }
+  .stats { display: flex; gap: 8px; font-size: 11px; font-weight: 600; }
   .ok { color: #16a34a; }
   .info-blue { color: #2563eb; }
   .warn { color: #d97706; }
-
-  .caret {
-    font-size: 22px;
-    color: var(--muted);
-  }
-
-  .state {
-    margin-top: 24px;
-    color: var(--muted);
-  }
-
-  .state.error {
-    color: #dc2626;
-  }
+  .caret { color: #cbd5e1; font-size: 20px; }
+  .state { margin-top: 40px; color: var(--muted); }
+  .error { color: #ef4444; }
 </style>
