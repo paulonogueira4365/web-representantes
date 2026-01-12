@@ -5,10 +5,19 @@
   import { browser } from "$app/environment";
 
   /* =====================
-      PROPS & TYPES
+      PROPS
   ===================== */
   const props = $props<{ data: { id: string } }>();
   const representanteId = props.data.id;
+
+  /* =====================
+      TIPOS
+  ===================== */
+  type Representante = {
+    id: string;
+    nome: string;
+    push_active: boolean;
+  };
 
   type Otica = {
     id: string;
@@ -17,13 +26,10 @@
     uf: string;
     telefone: string;
     responsavel: string;
-    origem: string;
     funil_etapa: string;
-    liberada: boolean;
     status: string;
     observacao: string | null;
     link_google_maps: string | null;
-    created_at: string;
     sgo_id: string | null;
     pode_marcar_contato: boolean;
   };
@@ -33,31 +39,29 @@
     status: string;
     meio: string;
     canal: string;
-    origem: string;
-    observacao: string | null;
     created_at: string;
   };
 
   type Pedido = {
     id: string;
     tipo: "PAGO" | "BONIFICADO";
-    status: "ATIVO" | "CANCELADO";
     valor: number | null;
     created_at: string;
     id_venda_sgo: string | null;
   };
 
   /* =====================
-      STATE (RUNES)
+      STATE
   ===================== */
   let view = $state<"lista" | "detalhes">("lista");
-  let activeTab = $state<"pendentes" | "concluidas">("pendentes");
-  let searchQuery = $state("");
+
+  let representantes = $state<Representante[]>([]);
+  let representanteSelecionado = $state<string | null>(null);
+  let modalIdentificacaoOpen = $state(true);
 
   let oticasOriginal = $state<Otica[]>([]);
   let oticaSelecionada = $state<Otica | null>(null);
   let contatos = $state<Contato[]>([]);
-
   let pedidos = $state<Pedido[]>([]);
   let receitaTotal = $state(0);
 
@@ -66,117 +70,109 @@
   let carregandoPedidos = $state(false);
   let salvandoContato = $state(false);
 
-  let aplicacaoPromocaoAtiva = $state<any | null>(null);
-
-  /* =====================
-      NOTIFICAÇÃO
-  ===================== */
-  let oneSignalInstance = $state<any>(null);
-  let exibirBannerNotificacao = $state(false);
-  let isOneSignalInitialized = false;
+  let oneSignal: any = null;
 
   /* =====================
       HELPERS
   ===================== */
-  const formatData = (d?: string | null) =>
-    d ? new Date(d).toLocaleString("pt-BR") : "—";
-
   const formatDataBR = (d?: string | null) =>
     d ? new Date(d).toLocaleDateString("pt-BR") : "—";
 
   /* =====================
-      FILTRO
+      INIT
   ===================== */
-  let gruposExibidos = $derived.by(() => {
-    const filtradas = oticasOriginal.filter(o => {
-      const statusMatch =
-        activeTab === "pendentes"
-          ? o.pode_marcar_contato
-          : !o.pode_marcar_contato;
-
-      const searchMatch =
-        o.nome.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        o.cidade.toLowerCase().includes(searchQuery.toLowerCase());
-
-      return statusMatch && searchMatch;
-    });
-
-    const grupos: Record<string, Otica[]> = {};
-    filtradas.forEach(o => {
-      grupos[o.cidade] ??= [];
-      grupos[o.cidade].push(o);
-    });
-
-    return Object.keys(grupos).sort().map(cidade => ({
-      nome: cidade,
-      itens: grupos[cidade].sort((a, b) =>
-        a.nome.localeCompare(b.nome)
-      )
-    }));
+  onMount(async () => {
+    await carregarRepresentantes();
+    await carregarOticas();
   });
 
   /* =====================
-      AÇÕES
+      NOTIFICAÇÃO (MODELO NOVO)
   ===================== */
+  async function confirmarIdentidade() {
+  if (!browser || !representanteSelecionado) return;
+
+  /* =====================
+     1️⃣ PERMISSÃO NATIVA
+  ===================== */
+  let permission = getNotificationPermission();
+
+  if (permission === "default") {
+    permission = await Notification.requestPermission();
+  }
+
+  if (permission !== "granted") {
+    alert("É necessário permitir notificações para continuar.");
+    return;
+  }
+
+  /* =====================
+     2️⃣ INIT ONESIGNAL
+  ===================== */
+  const mod = await import("react-onesignal");
+  oneSignal = mod.default;
+
+  await oneSignal.init({
+    appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
+    allowLocalhostAsSecureOrigin: true,
+    notifyButton: { enable: false }
+  });
+
+  /* =====================
+     3️⃣ PROTEÇÃO ANTI DUPLICAÇÃO
+  ===================== */
+  const currentExternalId =
+    await oneSignal.User?.getExternalId?.();
+
+  if (currentExternalId && currentExternalId !== representanteSelecionado) {
+    // 🔥 estava vinculado a outro representante
+    await oneSignal.logout();
+  }
+
+  /* =====================
+     4️⃣ LOGIN DEFINITIVO
+  ===================== */
+  await oneSignal.login(representanteSelecionado);
+
+  /* =====================
+     5️⃣ SALVA NO BANCO
+  ===================== */
+  await supabase
+    .from("representantes")
+    .update({ push_active: true })
+    .eq("id", representanteSelecionado);
+
+  modalIdentificacaoOpen = false;
+}
+
+function getNotificationPermission(): NotificationPermission {
+  return Notification.permission;
+}
+
+
+
+  /* =====================
+      DADOS
+  ===================== */
+  async function carregarRepresentantes() {
+    const { data } = await supabase
+      .from("representantes")
+      .select("id, nome, push_active")
+      .order("nome");
+
+    representantes = data ?? [];
+  }
+
   async function carregarOticas() {
     carregandoLista = true;
-    try {
-      const [{ data: oticas }, { data: contatosRep }] = await Promise.all([
-        supabase
-          .from("vw_oticas_representante_cards")
-          .select("*")
-          .eq("representante_id", representanteId),
-        supabase
-          .from("contatos")
-          .select("otica_id")
-          .eq("origem", "ATIVO")
-      ]);
 
-      const contatoMap = new Set(contatosRep?.map(c => c.otica_id) ?? []);
+    const { data } = await supabase
+      .from("vw_oticas_representante_cards")
+      .select("*")
+      .eq("representante_id", representanteId);
 
-      oticasOriginal = (oticas ?? []).map((o: any) => ({
-        ...o,
-        pode_marcar_contato: !contatoMap.has(o.id)
-      }));
-    } finally {
-      carregandoLista = false;
-    }
-  }
-
-  async function initOneSignal() {
-    if (!browser || isOneSignalInitialized) return;
-    isOneSignalInitialized = true;
-
-    const mod = await import("react-onesignal");
-    oneSignalInstance = mod.default;
-
-    await oneSignalInstance.init({
-      appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
-      allowLocalhostAsSecureOrigin: true,
-      notifyButton: { enable: false }
-    });
-
-    await oneSignalInstance.login(representanteId);
-
-    const { data: rep } = await supabase
-      .from("representantes")
-      .select("push_active")
-      .eq("id", representanteId)
-      .single();
-
-    if (!rep?.push_active) exibirBannerNotificacao = true;
-  }
-
-  async function ativarNotificacoes() {
-    await oneSignalInstance.Notifications.requestPermission();
-    await oneSignalInstance.login(representanteId);
-
-    await supabase
-      .from("representantes")
-      .update({ push_active: true })
-      .eq("id", representanteId);
-
-    exibirBannerNotificacao = false;
+    oticasOriginal = data ?? [];
+    carregandoLista = false;
   }
 
   async function abrirDetalhes(o: Otica) {
@@ -188,7 +184,6 @@
       .from("contatos")
       .select("*")
       .eq("otica_id", o.id)
-      .eq("origem", "ATIVO")
       .order("created_at", { ascending: false });
 
     contatos = contatosData ?? [];
@@ -197,42 +192,30 @@
 
     const { data: pedidosData } = await supabase
       .from("pedidos")
-      .select("id, tipo, status, valor, created_at, id_venda_sgo")
+      .select("*")
       .eq("otica_id", o.id)
-      .eq("status", "ATIVO")
-      .order("created_at", { ascending: false });
+      .eq("status", "ATIVO");
 
     pedidos = pedidosData ?? [];
-
     receitaTotal = pedidos.reduce(
       (t, p) => (p.tipo === "PAGO" && p.valor ? t + p.valor : t),
       0
     );
 
     carregandoPedidos = false;
-
-    const { data: promo } = await supabase
-      .from("aplicacoes_promocao")
-      .select("*, promocoes(*)")
-      .eq("otica_id", o.id)
-      .eq("status", "APLICADA")
-      .limit(1);
-
-    aplicacaoPromocaoAtiva = promo?.[0] ?? null;
     carregandoDetalhes = false;
   }
 
   async function marcarContato() {
-    if (!oticaSelecionada?.pode_marcar_contato) return;
+    if (!oticaSelecionada) return;
 
     salvandoContato = true;
+
     await supabase.from("contatos").insert({
       otica_id: oticaSelecionada.id,
       meio: "MENSAGEM",
       canal: "SISTEMA",
-      origem: "ATIVO",
-      status: "REALIZADO",
-      conta_comissao: true
+      status: "REALIZADO"
     });
 
     await carregarOticas();
@@ -241,64 +224,42 @@
   }
 
   onMount(async () => {
-    carregarOticas();
-    await initOneSignal();
-  });
+  if (!browser) return;
+
+  if (Notification.permission === "granted" && representanteId) {
+    const mod = await import("react-onesignal");
+    oneSignal = mod.default;
+
+    await oneSignal.init({ appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b" });
+    await oneSignal.login(representanteId);
+  }
+});
+
 </script>
+
 
 <!-- TEMPLATE (HTML + CSS permanece o mesmo que você já tem) -->
 
 
 <div class="wrp">
-  {#if exibirBannerNotificacao}
-    <div class="banner-alerta">
-      <div class="banner-content">
-        <span class="icon">🔔</span>
-        <div>
-          <strong>Ative as notificações</strong>
-          <p>Seja avisado assim que uma nova ótica for liberada.</p>
-        </div>
-      </div>
-      <button onclick={ativarNotificacoes}>ATIVAR AGORA</button>
-    </div>
-  {/if}
-
   {#if view === "lista"}
     <header class="header">
       <h1>Painel do Representante</h1>
       <button class="btn-ghost" onclick={() => goto("/")}>Sair</button>
     </header>
 
-    <div class="search-box">
-      <input type="text" placeholder="Buscar ótica ou cidade..." bind:value={searchQuery} />
-    </div>
-
-    <nav class="tabs">
-      <button class:active={activeTab === "pendentes"} onclick={() => activeTab = "pendentes"}>
-        PENDENTES <span>({oticasOriginal.filter(o => o.pode_marcar_contato).length})</span>
-      </button>
-      <button class:active={activeTab === "concluidas"} onclick={() => activeTab = "concluidas"}>
-        CONTATADAS <span>({oticasOriginal.filter(o => !o.pode_marcar_contato).length})</span>
-      </button>
-    </nav>
-
     {#if carregandoLista}
       <p class="state">Carregando óticas...</p>
     {:else}
       <div class="list">
-        {#each gruposExibidos as grupo}
-          <div class="city-group">
-            <h2 class="city-label">{grupo.nome}</h2>
-            {#each grupo.itens as o}
-              <button class="card" onclick={() => abrirDetalhes(o)}>
-                <div>
-                  <div class="title">{o.nome}</div>
-                  <div class="sub">{o.responsavel} • {o.telefone}</div>
-                </div>
-                <div class="chevron">›</div>
-              </button>
-            {/each}
-          </div>
+        {#each oticasOriginal as o (o.id)}
+          <button class="card" onclick={() => abrirDetalhes(o)}>
+            <div>
+              <div class="title">{o.nome}</div>
+              <div class="sub">{o.cidade} • {o.uf}</div>
+            </div>
+            <div class="chevron">›</div>
+          </button>
         {:else}
           <p class="state">Nenhuma ótica encontrada.</p>
         {/each}
@@ -307,129 +268,145 @@
 
   {:else if oticaSelecionada}
     <article class="details">
-      <button class="btn-back" onclick={() => view = "lista"}>← Voltar para lista</button>
-      
+      <button class="btn-back" onclick={() => view = "lista"}>
+        ← Voltar para lista
+      </button>
+
       <h2>{oticaSelecionada.nome}</h2>
 
       <div class="grid">
         <div><b>Responsável</b><span>{oticaSelecionada.responsavel}</span></div>
         <div><b>Telefone</b><span>{oticaSelecionada.telefone}</span></div>
-        {#if oticaSelecionada.sgo_id}
-          <div><b>SGO ID</b><span class="mono">{oticaSelecionada.sgo_id}</span></div>
-        {/if}
         <div><b>Cidade / UF</b><span>{oticaSelecionada.cidade} • {oticaSelecionada.uf}</span></div>
-        <div><b>Etapa do Funil</b><span>{oticaSelecionada.funil_etapa}</span></div>
+        <div><b>Etapa</b><span>{oticaSelecionada.funil_etapa}</span></div>
         <div><b>Status</b><span>{oticaSelecionada.status}</span></div>
-        </div> <!-- FECHA .grid -->
-
-
-        
- <!-- RECEITA DA ÓTICA -->
-<section class="panel receita-panel">
-  <h3>Receita da Ótica</h3>
-  <div class="receita-box">
-    <span>Total faturado</span>
-    <strong>R$ {receitaTotal.toFixed(2)}</strong>
-  </div>
-</section>
-
-<!-- PEDIDOS DA ÓTICA -->
-<section class="panel">
-  <h3>Pedidos da Ótica</h3>
-
-  {#if carregandoPedidos}
-    <p class="muted">Carregando pedidos...</p>
-
-  {:else if pedidos.length === 0}
-    <p class="muted">Nenhum pedido encontrado.</p>
-
-  {:else}
-    {#each pedidos as p (p.id)}
-      <div class="pedido-item">
-        <div class="pedido-top">
-          <strong>
-            {#if p.id_venda_sgo}
-              SGO #{p.id_venda_sgo}
-            {:else}
-              Pedido interno
-            {/if}
-          </strong>
-          <span class="status">{p.tipo}</span>
-        </div>
-
-        <div class="pedido-info">
-          <span>{formatDataBR(p.created_at)}</span>
-          <b>{p.valor ? `R$ ${p.valor.toFixed(2)}` : "—"}</b>
-        </div>
+        {#if oticaSelecionada.sgo_id}
+          <div><b>SGO</b><span class="mono">{oticaSelecionada.sgo_id}</span></div>
+        {/if}
       </div>
-    {/each}
-  {/if}
-</section>
 
+      <section class="panel">
+        <h3>Receita</h3>
+        <strong>R$ {receitaTotal.toFixed(2)}</strong>
+      </section>
 
+      <section class="panel">
+        <h3>Pedidos</h3>
+        {#if carregandoPedidos}
+          <p class="muted">Carregando pedidos...</p>
+        {:else}
+          {#each pedidos as p (p.id)}
+            <div class="pedido-item">
+              <span>{formatDataBR(p.created_at)}</span>
+              <b>{p.valor ? `R$ ${p.valor.toFixed(2)}` : "—"}</b>
+            </div>
+          {:else}
+            <p class="muted">Nenhum pedido</p>
+          {/each}
+        {/if}
+      </section>
 
+      <section class="panel">
+        <button
+          class="btn-primary"
+          onclick={marcarContato}
+          disabled={salvandoContato}
+        >
+          {salvandoContato ? "Salvando..." : "CONFIRMAR CONTATO"}
+        </button>
+      </section>
 
-{#if oticaSelecionada.observacao}
-  <div class="obs-box">
-    <b>Observações da Ótica</b>
-    <p>{oticaSelecionada.observacao}</p>
-  </div>
-{/if}
-
-<div class="quick-actions">
-  <a class="action-btn call" href="tel:{oticaSelecionada.telefone}">📞 Ligar</a>
-  {#if oticaSelecionada.link_google_maps}
-    <a class="action-btn map" href={oticaSelecionada.link_google_maps} target="_blank">📍 Maps</a>
-  {/if}
-</div>
-
-<section class="panel">
-  {#if oticaSelecionada.pode_marcar_contato}
-    <button class="btn-primary" onclick={marcarContato} disabled={salvandoContato}>
-      {salvandoContato ? "Salvando..." : "CONFIRMAR CONTATO"}
-    </button>
-  {:else}
-    <div class="pill-ok-full">✓ Contato já registrado</div>
-  {/if}
-</section>
-
-<section class="panel">
-  <h3>Histórico de Contatos</h3>
-  {#if contatos.length === 0}
-    <p class="muted">Nenhum contato registrado.</p>
-  {:else}
-    {#each contatos as c (c.id)}
-      <div class="contact-item">
-        <b>{c.status}</b>
-        <span>{formatData(c.created_at)}</span>
-        <small>{c.meio} • {c.canal}</small>
-      </div>
-    {/each}
-  {/if}
-</section>
-
-{#if aplicacaoPromocaoAtiva}
-  <section class="panel promo-panel">
-    <h3 class="promo-title">🎯 CONDIÇÕES NEGOCIADAS</h3>
-    <div class="promo-box">
-      <strong>{aplicacaoPromocaoAtiva.promocoes.nome}</strong>
-      <div class="promo-validade">
-        <small class="label">Validade</small>
-        <strong>
-          {formatDataBR(aplicacaoPromocaoAtiva.validade_inicio)}
-          →
-          {formatDataBR(aplicacaoPromocaoAtiva.validade_fim)}
-        </strong>
-      </div>
-    </div>
-  </section>
-{/if}
+      <section class="panel">
+        <h3>Histórico</h3>
+        {#each contatos as c (c.id)}
+          <div class="contact-item">
+            <b>{c.status}</b>
+            <span>{formatDataBR(c.created_at)}</span>
+            <small>{c.meio} • {c.canal}</small>
+          </div>
+        {:else}
+          <p class="muted">Sem contatos</p>
+        {/each}
+      </section>
     </article>
   {/if}
 </div>
 
+{#if modalIdentificacaoOpen}
+  <div class="modal">
+    <div class="modal-card">
+      <h3>Identifique-se</h3>
+      <p class="muted">Selecione seu nome</p>
+
+      <select bind:value={representanteSelecionado}>
+        <option value="">Selecione</option>
+        {#each representantes as r}
+          <option value={r.id}>{r.nome}</option>
+        {/each}
+      </select>
+
+      <button
+        class="btn-primary"
+        disabled={!representanteSelecionado}
+        onclick={confirmarIdentidade}
+      >
+        Confirmar
+      </button>
+    </div>
+  </div>
+{/if}
+
 
 <style>
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.modal-card {
+  background: #fff;
+  padding: 24px;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+
+.modal-card h3 {
+  margin-bottom: 6px;
+}
+
+.modal-card select {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  margin: 12px 0;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  background: #0ea5e3;
+  color: #fff;
+  font-weight: 800;
+  border: none;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+
+
+
+
   :global(body) { background: #f7f9fb; font-family: 'Inter', sans-serif; margin: 0; }
   .wrp { padding: 16px; max-width: 500px; margin: 0 auto; }
   
