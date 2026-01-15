@@ -2,23 +2,13 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { supabase } from "$lib/supabase";
-  import { browser } from "$app/environment";
 
-  /* =====================
-      PROPS
-  ===================== */
   const props = $props<{ data: { id: string } }>();
-  const representanteId = props.data.id;
+  const representanteId = String(props.data.id);
 
   /* =====================
       TIPOS
   ===================== */
-  type Representante = {
-    id: string;
-    nome: string;
-    push_active: boolean;
-  };
-
   type Otica = {
     id: string;
     nome: string;
@@ -31,7 +21,9 @@
     observacao: string | null;
     link_google_maps: string | null;
     sgo_id: string | null;
-    pode_marcar_contato: boolean;
+    contatada: boolean;
+    total_pedidos: number;
+    receita: number;
   };
 
   type Contato = {
@@ -50,27 +42,28 @@
     id_venda_sgo: string | null;
   };
 
+  type Promocao = {
+    validade_inicio: string;
+    validade_fim: string;
+    promocoes: { nome: string }[];
+  };
+
   /* =====================
-      STATE
+      STATE (Svelte 5)
   ===================== */
   let view = $state<"lista" | "detalhes">("lista");
+  let filtroContato = $state<"todas" | "sem" | "com">("sem");
+  let searchQuery = $state("");
 
-  let representantes = $state<Representante[]>([]);
-  let representanteSelecionado = $state<string | null>(null);
-  let modalIdentificacaoOpen = $state(true);
-
-  let oticasOriginal = $state<Otica[]>([]);
+  let oticas = $state<Otica[]>([]);
   let oticaSelecionada = $state<Otica | null>(null);
   let contatos = $state<Contato[]>([]);
   let pedidos = $state<Pedido[]>([]);
-  let receitaTotal = $state(0);
+  let promocaoAtiva = $state<Promocao | null>(null);
 
   let carregandoLista = $state(true);
-  let carregandoDetalhes = $state(false);
   let carregandoPedidos = $state(false);
   let salvandoContato = $state(false);
-
-  let oneSignal: any = null;
 
   /* =====================
       HELPERS
@@ -79,106 +72,96 @@
     d ? new Date(d).toLocaleDateString("pt-BR") : "—";
 
   /* =====================
-      INIT
+      KPIs TOPO
   ===================== */
-  onMount(async () => {
-    await carregarRepresentantes();
-    await carregarOticas();
+  let resumo = $derived.by(() => {
+    const comPedido = oticas.filter(o => o.total_pedidos > 0);
+    const receitaTotal = comPedido.reduce((t, o) => t + o.receita, 0);
+    const ticketMedio =
+      comPedido.length ? receitaTotal / comPedido.length : 0;
+
+    return {
+      oticasComPedido: comPedido.length,
+      receitaTotal,
+      ticketMedio
+    };
   });
 
   /* =====================
-      NOTIFICAÇÃO (MODELO NOVO)
+      FILTRO + ORDEM
   ===================== */
-  async function confirmarIdentidade() {
-  if (!browser || !representanteSelecionado) return;
+  let oticasFiltradas = $derived.by(() => {
+    const termo = searchQuery.toLowerCase();
 
-  /* =====================
-     1️⃣ PERMISSÃO NATIVA
-  ===================== */
-  let permission = getNotificationPermission();
+    return oticas
+      .filter(o => {
+        const filtroOk =
+          filtroContato === "todas" ||
+          (filtroContato === "sem" && !o.contatada) ||
+          (filtroContato === "com" && o.contatada);
 
-  if (permission === "default") {
-    permission = await Notification.requestPermission();
-  }
-
-  if (permission !== "granted") {
-    alert("É necessário permitir notificações para continuar.");
-    return;
-  }
-
-  /* =====================
-     2️⃣ INIT ONESIGNAL
-  ===================== */
-  const mod = await import("react-onesignal");
-  oneSignal = mod.default;
-
-  await oneSignal.init({
-    appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b",
-    allowLocalhostAsSecureOrigin: true,
-    notifyButton: { enable: false }
+        return (
+          filtroOk &&
+          (o.nome.toLowerCase().includes(termo) ||
+            o.cidade.toLowerCase().includes(termo))
+        );
+      })
+      .sort((a, b) => {
+        if (a.contatada !== b.contatada) return a.contatada ? 1 : -1;
+        return a.nome.localeCompare(b.nome);
+      });
   });
 
   /* =====================
-     3️⃣ PROTEÇÃO ANTI DUPLICAÇÃO
+      DATA
   ===================== */
-  const currentExternalId =
-    await oneSignal.User?.getExternalId?.();
-
-  if (currentExternalId && currentExternalId !== representanteSelecionado) {
-    // 🔥 estava vinculado a outro representante
-    await oneSignal.logout();
-  }
-
-  /* =====================
-     4️⃣ LOGIN DEFINITIVO
-  ===================== */
-  await oneSignal.login(representanteSelecionado);
-
-  /* =====================
-     5️⃣ SALVA NO BANCO
-  ===================== */
-  await supabase
-    .from("representantes")
-    .update({ push_active: true })
-    .eq("id", representanteSelecionado);
-
-  modalIdentificacaoOpen = false;
-}
-
-function getNotificationPermission(): NotificationPermission {
-  return Notification.permission;
-}
-
-
-
-  /* =====================
-      DADOS
-  ===================== */
-  async function carregarRepresentantes() {
-    const { data } = await supabase
-      .from("representantes")
-      .select("id, nome, push_active")
-      .order("nome");
-
-    representantes = data ?? [];
-  }
-
   async function carregarOticas() {
     carregandoLista = true;
 
-    const { data } = await supabase
+    const { data: lista } = await supabase
       .from("vw_oticas_representante_cards")
       .select("*")
       .eq("representante_id", representanteId);
 
-    oticasOriginal = data ?? [];
+    const { data: contatosData } = await supabase
+      .from("representante_otica_contato")
+      .select("otica_id, contatada")
+      .eq("representante_id", representanteId);
+
+    const { data: pedidosData } = await supabase
+      .from("pedidos")
+      .select("otica_id, valor, tipo")
+      .eq("status", "ATIVO");
+
+    const mapContato = new Map(
+      (contatosData ?? []).map(c => [c.otica_id, c.contatada])
+    );
+
+    const mapPedidos = new Map<string, { qtd: number; receita: number }>();
+    for (const p of pedidosData ?? []) {
+      if (p.tipo !== "PAGO" || !p.valor) continue;
+      const cur = mapPedidos.get(p.otica_id) ?? { qtd: 0, receita: 0 };
+      cur.qtd += 1;
+      cur.receita += p.valor;
+      mapPedidos.set(p.otica_id, cur);
+    }
+
+    oticas = (lista ?? []).map((o: any) => {
+      const info = mapPedidos.get(o.id);
+      return {
+        ...o,
+        contatada: mapContato.get(o.id) ?? false,
+        total_pedidos: info?.qtd ?? 0,
+        receita: info?.receita ?? 0
+      };
+    });
+
     carregandoLista = false;
   }
 
   async function abrirDetalhes(o: Otica) {
     view = "detalhes";
     oticaSelecionada = o;
-    carregandoDetalhes = true;
 
     const { data: contatosData } = await supabase
       .from("contatos")
@@ -190,20 +173,24 @@ function getNotificationPermission(): NotificationPermission {
 
     carregandoPedidos = true;
 
-    const { data: pedidosData } = await supabase
-      .from("pedidos")
-      .select("*")
-      .eq("otica_id", o.id)
-      .eq("status", "ATIVO");
+    const [{ data: pedidosData }, { data: promo }] = await Promise.all([
+      supabase
+        .from("pedidos")
+        .select("*")
+        .eq("otica_id", o.id)
+        .eq("status", "ATIVO"),
+
+      supabase
+        .from("aplicacoes_promocao")
+        .select("validade_inicio,validade_fim,promocoes(nome)")
+        .eq("otica_id", o.id)
+        .eq("status", "APLICADA")
+        .limit(1)
+    ]);
 
     pedidos = pedidosData ?? [];
-    receitaTotal = pedidos.reduce(
-      (t, p) => (p.tipo === "PAGO" && p.valor ? t + p.valor : t),
-      0
-    );
-
+    promocaoAtiva = promo?.[0] ?? null;
     carregandoPedidos = false;
-    carregandoDetalhes = false;
   }
 
   async function marcarContato() {
@@ -211,10 +198,16 @@ function getNotificationPermission(): NotificationPermission {
 
     salvandoContato = true;
 
+    await supabase.from("representante_otica_contato").upsert({
+      representante_id: representanteId,
+      otica_id: oticaSelecionada.id,
+      contatada: true
+    });
+
     await supabase.from("contatos").insert({
       otica_id: oticaSelecionada.id,
       meio: "MENSAGEM",
-      canal: "SISTEMA",
+      canal: "PORTAL",
       status: "REALIZADO"
     });
 
@@ -223,24 +216,12 @@ function getNotificationPermission(): NotificationPermission {
     salvandoContato = false;
   }
 
-  onMount(async () => {
-  if (!browser) return;
-
-  if (Notification.permission === "granted" && representanteId) {
-    const mod = await import("react-onesignal");
-    oneSignal = mod.default;
-
-    await oneSignal.init({ appId: "5f714a7b-1f68-495e-a56d-8cbc137d8f4b" });
-    await oneSignal.login(representanteId);
-  }
-});
-
+  onMount(carregarOticas);
 </script>
 
-
-<!-- TEMPLATE (HTML + CSS permanece o mesmo que você já tem) -->
-
-
+<!-- =====================
+     TEMPLATE
+===================== -->
 <div class="wrp">
   {#if view === "lista"}
     <header class="header">
@@ -248,11 +229,28 @@ function getNotificationPermission(): NotificationPermission {
       <button class="btn-ghost" onclick={() => goto("/")}>Sair</button>
     </header>
 
+    <!-- KPIs -->
+    <div class="kpis">
+      <div class="kpi"><small>Óticas com pedidos</small><strong>{resumo.oticasComPedido}</strong></div>
+      <div class="kpi"><small>Receita total</small><strong>R$ {resumo.receitaTotal.toFixed(2)}</strong></div>
+      <div class="kpi"><small>Ticket médio</small><strong>R$ {resumo.ticketMedio.toFixed(2)}</strong></div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="filters">
+      <input placeholder="Buscar ótica ou cidade…" bind:value={searchQuery} />
+      <select bind:value={filtroContato}>
+        <option value="sem">Sem contato</option>
+        <option value="com">Com contato</option>
+        <option value="todas">Todas</option>
+      </select>
+    </div>
+
     {#if carregandoLista}
       <p class="state">Carregando óticas...</p>
     {:else}
       <div class="list">
-        {#each oticasOriginal as o (o.id)}
+        {#each oticasFiltradas as o (o.id)}
           <button class="card" onclick={() => abrirDetalhes(o)}>
             <div>
               <div class="title">{o.nome}</div>
@@ -267,6 +265,7 @@ function getNotificationPermission(): NotificationPermission {
     {/if}
 
   {:else if oticaSelecionada}
+    <!-- 🔥 DETALHES ORIGINAIS (MANTIDOS) -->
     <article class="details">
       <button class="btn-back" onclick={() => view = "lista"}>
         ← Voltar para lista
@@ -287,7 +286,7 @@ function getNotificationPermission(): NotificationPermission {
 
       <section class="panel">
         <h3>Receita</h3>
-        <strong>R$ {receitaTotal.toFixed(2)}</strong>
+        <strong>R$ {oticaSelecionada.receita.toFixed(2)}</strong>
       </section>
 
       <section class="panel">
@@ -310,9 +309,13 @@ function getNotificationPermission(): NotificationPermission {
         <button
           class="btn-primary"
           onclick={marcarContato}
-          disabled={salvandoContato}
+          disabled={salvandoContato || oticaSelecionada.contatada}
         >
-          {salvandoContato ? "Salvando..." : "CONFIRMAR CONTATO"}
+          {oticaSelecionada.contatada
+            ? "CONTATO JÁ REGISTRADO"
+            : salvandoContato
+              ? "Salvando..."
+              : "CONFIRMAR CONTATO"}
         </button>
       </section>
 
@@ -332,32 +335,35 @@ function getNotificationPermission(): NotificationPermission {
   {/if}
 </div>
 
-{#if modalIdentificacaoOpen}
-  <div class="modal">
-    <div class="modal-card">
-      <h3>Identifique-se</h3>
-      <p class="muted">Selecione seu nome</p>
-
-      <select bind:value={representanteSelecionado}>
-        <option value="">Selecione</option>
-        {#each representantes as r}
-          <option value={r.id}>{r.nome}</option>
-        {/each}
-      </select>
-
-      <button
-        class="btn-primary"
-        disabled={!representanteSelecionado}
-        onclick={confirmarIdentidade}
-      >
-        Confirmar
-      </button>
-    </div>
-  </div>
-{/if}
 
 
 <style>
+  :global(body){background:#f7f9fb;font-family:Inter,sans-serif}
+  .wrp{padding:16px;max-width:540px;margin:auto}
+  .header{display:flex;justify-content:space-between}
+  .btn-ghost{background:#fff;border:1px solid #e2e8f0;padding:8px 12px;border-radius:8px}
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+  .kpi{background:#fff;padding:10px;border-radius:12px;text-align:center}
+  .filters{display:flex;gap:8px;margin-bottom:12px}
+  .filters input,.filters select{flex:1;padding:10px;border-radius:10px;border:1px solid #e2e8f0}
+  .city{font-size:12px;color:#94a3b8;margin:12px 0 4px}
+  .card{background:#fff;padding:12px;border-radius:12px;margin-bottom:6px;display:flex;justify-content:space-between}
+  .title{font-weight:700}
+  .sub,.meta{font-size:12px;color:#64748b}
+  .btn-action{background:#0ea5e3;color:#fff;border:none;border-radius:8px;padding:8px;font-weight:700}
+  .btn-action:disabled{background:#cbd5e1}
+  .details{background:#fff;padding:16px;border-radius:16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+  .grid b{font-size:11px;color:#94a3b8}
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+  .btn.call{background:#10b981}
+  .btn.map{background:#6366f1}
+  .btn{color:#fff;text-align:center;padding:10px;border-radius:10px;text-decoration:none;font-weight:700}
+  .promo{background:#f0fdfa;padding:10px;border-radius:10px;margin:12px 0}
+  .pedido{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}
+  .obs{background:#f8fafc;padding:10px;border-radius:10px}
+  .mono{font-family:monospace;color:#0ea5e3;font-weight:700}
+  
 .modal {
   position: fixed;
   inset: 0;
@@ -491,3 +497,4 @@ function getNotificationPermission(): NotificationPermission {
 }
 
 </style>
+
